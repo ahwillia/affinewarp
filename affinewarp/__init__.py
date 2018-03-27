@@ -45,7 +45,7 @@ class AffineWarping(object):
         self.resids = self.warped_data - self.data
 
         # initial loss for each trial calculation
-        self.losses = np.sum(self.resids**2, axis=(1,2))
+        self.losses = np.sum(self.resids**2, axis=(1,2)) # TODO: change to dot(x, x) for speed.
         self.loss_hist = [np.mean(self.losses)]
 
     def _compute_warping_funcs(self, taus=None, betas=None):
@@ -76,7 +76,7 @@ class AffineWarping(object):
 
             # warp data and compute new losses
             wdata = np.array([self.apply_warp(t) for t in warps])
-            losses = np.sum((wdata - self.data)**2, axis=(1,2))
+            losses = np.sum((wdata - self.data)**2, axis=(1,2))  # TODO: change to dot(x, x)
 
             # update warping parameters for trials with improved loss
             idx = losses < self.losses
@@ -105,9 +105,10 @@ class AffineWarping(object):
             dtemp = np.zeros(self.template.shape)
             dtemp[:self.n_timepoints-1] = np.diff(self.template, axis=0) / self.dt
             for k, z0 in zip(range(N), Z0):
-                grad[k] = -np.sum(resids[k]*dtemp[z0])
+                grad[k] = -np.
+                (resids[k]*dtemp[z0])
                 grad[k+N] = np.sum(resids[k]*(dtemp[z0]*self.tref[:,None]))
-            return .5*np.sum(resids**2), grad
+            return .5*np.sum(resids**2), grad  # TODO: change to dot(x, x)
 
         x0 = np.concatenate((self.taus, self.betas), axis=0)
         bounds = [(-self.max_shift, self.max_shift) for _ in range(self.n_trials)] + [(1/self.max_scale, self.max_scale) for _ in range(self.n_trials)]
@@ -118,7 +119,7 @@ class AffineWarping(object):
         self.warping_funcs = self._compute_warping_funcs()
         self.warped_data = np.array([self.apply_warp(t) for t in self.warping_funcs])
         self.resids = self.warped_data - self.data
-        self.losses = np.sum(self.resids**2, axis=(1,2))
+        self.losses = np.sum(self.resids**2, axis=(1,2))  # TODO: change to dot(x, x)
         self.loss_hist.append(np.mean(self.losses))
 
     def fit_template(self):
@@ -138,7 +139,7 @@ class AffineWarping(object):
             for res, z0, z1, lam in zip(resids, Z0, Z1, Lam):
                 grad[z0] += (1-lam)*res
                 grad[z1] += lam*res
-            return .5*np.sum(resids**2), grad.ravel()
+            return .5*np.sum(resids**2), grad.ravel()  # TODO: change to dot(x, x)
        
         result = minimize(f, self.template.ravel(), method='L-BFGS-B', jac=True)
         print(result.message)
@@ -149,7 +150,7 @@ class AffineWarping(object):
         # update loss
         self.warped_data = np.array([self.apply_warp(t) for t in self.warping_funcs])
         self.resids = self.warped_data - self.data
-        self.losses = np.sum(self.resids**2, axis=(1,2))
+        self.losses = np.sum(self.resids**2, axis=(1,2)) # TODO: change to dot(x, x)
         self.loss_hist.append(np.mean(self.losses))
 
         return self.template
