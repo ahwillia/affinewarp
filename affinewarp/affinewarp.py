@@ -2,9 +2,12 @@ import numpy as np
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 from tqdm import trange, tqdm
+from .utils import modf, _reduce_sum_assign, _reduce_sum_assign_matrix
+from .tridiag import trisolve
 
 # TODO :
 # Fit only with shifts
+
 
 class AffineWarping(object):
     """Represents a collection of time series, each with an affine time warp.
@@ -53,7 +56,6 @@ class AffineWarping(object):
 
         return np.array([np.clip(self.tref*b-t, 0, 1) for b, t in zip(betas, taus)])
 
-
     def _sample_taus(self):
         """Randomly sample shifts
         """
@@ -73,7 +75,7 @@ class AffineWarping(object):
 
             # warp data and compute new losses
             recon = np.array([self.apply_warp(t) for t in warps])
-            losses = np.sum((recon - self.data)**2, axis=(1,2))
+            losses = np.sum((recon - self.data)**2, axis=(1, 2))
 
             # update warping parameters for trials with improved loss
             idx = losses < self.losses
@@ -93,8 +95,7 @@ class AffineWarping(object):
             wfuncs = self._compute_warping_funcs(taus=x[:N], betas=x[N:])
             recon = np.array([self.apply_warp(z) for z in wfuncs])
             resids = recon - self.data
-            Lam, Z0 = np.modf(wfuncs*(self.n_timepoints-1))
-            Z0 = Z0.astype(int)
+            Lam, Z0 = modf(wfuncs*(self.n_timepoints-1))
             Z0[Lam < 1e-5] = -1
             Z0[Lam > (1-1e-5)] = -1
 
@@ -121,29 +122,46 @@ class AffineWarping(object):
     def fit_template(self):
         # compute normal equations
         T = self.n_timepoints
-        WtW = np.zeros((T+1, T+1))
-        WtX = np.zeros((T+1, self.n_features))
+        WtW_d0 = np.full(T, 1e-5)
+        WtW_d1 = np.zeros(T-1)
+        WtX = np.zeros((T, self.n_features))
         for wfunc, Xk in zip(self.warping_funcs, self.data):
-            lam, i = np.modf(wfunc * (T-1))
-            i = i.astype(int)
-            WtW[i, i] += 1-lam
-            WtW[i+1, i+1] += lam
-            WtX[i] += lam[:,None] * Xk
-            WtX[i+1] += (1-lam)[:,None] * Xk
-        WtW = WtW[:T, :T]
-        WtX = WtX[:T]
+            lam, i = modf(wfunc * (T-1))
+
+            _reduce_sum_assign(WtW_d0, i, (1-lam)**2)
+            _reduce_sum_assign(WtW_d0, i+1, lam**2)
+            _reduce_sum_assign(WtW_d1, i, lam*(1-lam))
+
+            _reduce_sum_assign_matrix(WtX, i, (1-lam[:, None]) * Xk)
+            _reduce_sum_assign_matrix(WtX, i+1, lam[:, None] * Xk)
 
         # update template
-        self.template = np.linalg.solve(WtW, WtX)
+        self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
         self.apply_warp = interp1d(self.tref, self.template, axis=0)
-    
+
         # update loss
         self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
         self.resids = self.reconstruction - self.data
-        self.losses = np.sum(self.resids**2, axis=(1,2))
+        self.losses = np.sum(self.resids**2, axis=(1, 2))
         self.loss_hist.append(np.mean(self.losses))
 
         return self.template
+
+    def _warping_matrices(self):
+
+        T = self.n_timepoints
+        trng = np.arange(T)
+
+        W = np.zeros((self.n_trials, T, T))
+
+        for k, wfunc in enumerate(self.warping_funcs):
+            lam, i = modf(wfunc * (T-1))
+
+            W[k][trng, i] = 1-lam
+            W[k][trng, (i+1) % T] += lam
+
+        return W
+
 
 
     # def fit_template2(self):
