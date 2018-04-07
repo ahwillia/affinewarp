@@ -10,7 +10,7 @@ from .tridiag import trisolve
 class AffineWarping(object):
     """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, data, max_shift=.2, max_scale=1.5):
+    def __init__(self, data, max_shift=.2, max_scale=1.5, boundary=0):
         """
         Params
         ------
@@ -26,6 +26,7 @@ class AffineWarping(object):
         # model options
         self.max_shift = max_shift
         self.max_scale = max_scale
+        self.boundary = boundary
 
         # trial-average under affine warping (initialize to random trial)
         self.template = data[np.random.randint(0, self.n_trials)].copy()
@@ -108,6 +109,11 @@ class AffineWarping(object):
 
         # update template
         self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
+
+        if self.boundary is not None:
+            self.template[0, :] = self.boundary
+            self.template[-1, :] = self.boundary
+
         self.apply_warp = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
 
         # update loss
