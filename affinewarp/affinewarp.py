@@ -5,17 +5,22 @@ import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _reduce_sum_assign, _reduce_sum_assign_matrix
 from .tridiag import trisolve
+import pdb
 
 
 class AffineWarping(object):
     """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, data, max_shift=.2, max_scale=1.5, boundary=0):
+    def __init__(self, data, q1=.3, q2=0, boundary=0, n_knots=0):
         """
         Params
         ------
         data (ndarray) : n_trials x n_timepoints x n_features
         """
+
+        # check inputs
+        # if n_knots < 0:
+            # raise ValueError('Number of knots must be nonnegative.')
 
         # data dimensions
         self.data = data
@@ -24,20 +29,21 @@ class AffineWarping(object):
         self.n_features = data.shape[2]
 
         # model options
-        self.max_shift = max_shift
-        self.max_scale = max_scale
         self.boundary = boundary
+        self.n_knots = n_knots
+        self.q1 = q1
+        self.q2 = q2
 
         # trial-average under affine warping (initialize to random trial)
-        self.template = data[np.random.randint(0, self.n_trials)].copy()
+        # self.template = data[np.random.randint(0, self.n_trials)].copy()
+        self.template = data.mean(axis=0)
         self.tref = np.linspace(0, 1, self.n_timepoints)
         self.dt = self.tref[1]-self.tref[0]
         self.apply_warp = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
 
-        # initialize shifts (taus) and scales (betas) of warping functions
-        self.taus = self._sample_taus()
-        self.betas = self._sample_betas()
-        self.warping_funcs = self._compute_warping_funcs()
+        # initialize warping functions
+        self.x_knots, self.y_knots = self._sample_knots(self.n_trials)
+        self.warping_funcs = self._compute_warping_funcs(self.x_knots, self.y_knots)
 
         # reconstructed data
         self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
@@ -47,35 +53,47 @@ class AffineWarping(object):
         self.losses = sci.linalg.norm(self.resids, axis=(1, 2))
         self.loss_hist = [np.mean(self.losses)]
 
-    def _compute_warping_funcs(self, taus=None, betas=None):
-        if taus is None:
-            taus = self.taus
-        if betas is None:
-            betas = self.betas
-        return np.clip((self.tref * betas[:, None]) - taus[:, None], 0, 1)
+    def _compute_warping_funcs(self, X, Y):
+        return np.clip([np.interp(self.tref, _x, _y) for _x, _y in zip(X, Y)], 0, 1)
+        # Alternate solution not involving a for loop:
+        #   dX = np.diff(X, axis=1)
+        #   dY = np.diff(Y, axis=1)
+        #   w = np.clip((self.tref - X[:, :-1, None])/dX[:, :, None], 0, 1)
+        #   return np.clip(Y[:, [0]] + np.sum(w*dY[:, :, None], axis=1), 0, 1)
 
-    def _sample_taus(self):
-        """Randomly sample shifts
+    def _sample_knots(self, n):
+        """Randomly sample warping functions
         """
-        lo, hi = -self.max_shift, self.max_shift
-        return np.random.uniform(lo, hi, size=self.n_trials)
+        if self.n_knots < 0:
+            x = np.column_stack((np.zeros(n), np.ones(n)))
+            x += np.random.uniform(-self.q2, self.q2, size=(n, 1))
+            return x, x
 
-    def _sample_betas(self):
-        """Randomly sample slopes
-        """
-        lo, hi = np.log(1/self.max_scale), np.log(self.max_scale)
-        return np.exp(np.random.uniform(lo, hi, size=self.n_trials))
+        x = np.column_stack((np.zeros(n), np.sort(np.random.rand(n, self.n_knots)), np.ones(n)))
+        y = np.column_stack((np.zeros(n), np.sort(np.random.rand(n, self.n_knots)), np.ones(n)))
+        y = self.q1*y + (1-self.q1)*x
 
-    def fit_warps(self, iterations=100):
+        y0 = np.random.uniform(-self.q2, self.q2, size=(n, 1))
+        y1 = np.random.uniform(1-self.q2, 1+self.q2, size=(n, 1))
+        y = (y1-y0)*y + y0
+
+        return x, y
+
+    def fit(self, iterations=10):
+
+        for it in trange(iterations):
+            self.fit_warps()
+            self.fit_template()
+
+    def fit_warps(self, iterations=100, desc=None):
 
         # preallocate room for sampled reconstructions
         recon = np.empty_like(self.reconstruction)
 
-        for i in trange(iterations):
+        for i in range(iterations):
             # randomly sample warping functions
-            taus = self._sample_taus()
-            betas = self._sample_betas()
-            warps = self._compute_warping_funcs(taus, betas)
+            X, Y = self._sample_knots(self.n_trials)
+            warps = self._compute_warping_funcs(X, Y)
 
             # warp data and compute new losses
             for k, t in enumerate(warps):
@@ -85,8 +103,8 @@ class AffineWarping(object):
             # update warping parameters for trials with improved loss
             idx = losses < self.losses
             self.losses[idx] = losses[idx]
-            self.taus[idx] = taus[idx]
-            self.betas[idx] = betas[idx]
+            self.x_knots[idx] = X[idx]
+            self.y_knots[idx] = Y[idx]
             self.warping_funcs[idx] = warps[idx]
             self.reconstruction[idx] = recon[idx]
             self.loss_hist.append(np.mean(self.losses))
@@ -124,13 +142,18 @@ class AffineWarping(object):
 
         return self.template
 
-    def transform(self, fill_value=0):
-        warped_data = np.empty_like(self.data)
+    def transform(self, data=None):
+        data = self.data if data is None else data
+
+        if len(data) != self.n_trials:
+            raise ValueError('Input must have the same number of trials as fitted data.')
+
+        warped_data = np.empty_like(data)
         for k in range(self.n_trials):
             f = interp1d(self.warping_funcs[k], self.tref, kind='slinear',
                          axis=0, bounds_error=False, fill_value='extrapolate',
                          assume_sorted=True)
-            g = interp1d(self.tref, self.data[k], axis=0, bounds_error=False,
-                         fill_value=fill_value, assume_sorted=True)
+            g = interp1d(self.tref, data[k], axis=0, bounds_error=False,
+                         fill_value=self.boundary, assume_sorted=True)
             warped_data[k] = g(f(self.tref))
         return warped_data

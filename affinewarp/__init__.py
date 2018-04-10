@@ -5,3 +5,4 @@ __author__ = 'Alex Williams <ahwillia@stanford.edu>'
 
 from .affinewarp import AffineWarping
 from . import tridiag
+from .crossval import crossval_neurons
