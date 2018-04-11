@@ -5,7 +5,8 @@ import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _reduce_sum_assign, _reduce_sum_assign_matrix
 from .tridiag import trisolve
-import pdb
+from .interp import bcast_interp
+import time
 
 
 class AffineWarping(object):
@@ -19,8 +20,8 @@ class AffineWarping(object):
         """
 
         # check inputs
-        # if n_knots < 0:
-            # raise ValueError('Number of knots must be nonnegative.')
+        if n_knots < 0:
+            raise ValueError('Number of knots must be nonnegative.')
 
         # data dimensions
         self.data = data
@@ -41,9 +42,10 @@ class AffineWarping(object):
         self.dt = self.tref[1]-self.tref[0]
         self.apply_warp = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
 
-        # initialize warping functions
-        self.x_knots, self.y_knots = self._sample_knots(self.n_trials)
-        self.warping_funcs = self._compute_warping_funcs(self.x_knots, self.y_knots)
+        # initialize warping functions to identity
+        self.x_knots = np.tile(np.linspace(0, 1, n_knots+2), (self.n_trials, 1))
+        self.y_knots = self.x_knots.copy()
+        self.warping_funcs = np.tile(self.tref, (self.n_trials, 1))
 
         # reconstructed data
         self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
@@ -53,22 +55,14 @@ class AffineWarping(object):
         self.losses = sci.linalg.norm(self.resids, axis=(1, 2))
         self.loss_hist = [np.mean(self.losses)]
 
-    def _compute_warping_funcs(self, X, Y):
-        return np.clip([np.interp(self.tref, _x, _y) for _x, _y in zip(X, Y)], 0, 1)
-        # Alternate solution not involving a for loop:
-        #   dX = np.diff(X, axis=1)
-        #   dY = np.diff(Y, axis=1)
-        #   w = np.clip((self.tref - X[:, :-1, None])/dX[:, :, None], 0, 1)
-        #   return np.clip(Y[:, [0]] + np.sum(w*dY[:, :, None], axis=1), 0, 1)
+        # used during fit update
+        self._new_warps = np.empty_like(self.warping_funcs)
+        self._new_pred = np.empty_like(self.reconstruction)
+        self._new_losses = np.empty_like(self.losses)
 
     def _sample_knots(self, n):
         """Randomly sample warping functions
         """
-        if self.n_knots < 0:
-            x = np.column_stack((np.zeros(n), np.ones(n)))
-            x += np.random.uniform(-self.q2, self.q2, size=(n, 1))
-            return x, x
-
         x = np.column_stack((np.zeros(n), np.sort(np.random.rand(n, self.n_knots)), np.ones(n)))
         y = np.column_stack((np.zeros(n), np.sort(np.random.rand(n, self.n_knots)), np.ones(n)))
         y = self.q1*y + (1-self.q1)*x
@@ -77,42 +71,53 @@ class AffineWarping(object):
         y1 = np.random.uniform(1-self.q2, 1+self.q2, size=(n, 1))
         y = (y1-y0)*y + y0
 
+        self.warp_time = 0
+        self.fit_time = 0
+
         return x, y
 
-    def fit(self, iterations=10):
+    def fit(self, iterations=10, warp_iterations=20):
 
-        for it in trange(iterations):
-            self.fit_warps()
+        pbar = trange(iterations)
+        for it in pbar:
+            l0 = self.loss_hist[-1]
+            self.fit_warps(warp_iterations)
             self.fit_template()
+            imp = (l0-self.loss_hist[-1])/l0
+            pbar.set_description('Loss improvement: {}%'.format(imp*100))
 
-    def fit_warps(self, iterations=100, desc=None):
-
-        # preallocate room for sampled reconstructions
-        recon = np.empty_like(self.reconstruction)
+    def fit_warps(self, iterations=20):
 
         for i in range(iterations):
             # randomly sample warping functions
             X, Y = self._sample_knots(self.n_trials)
-            warps = self._compute_warping_funcs(X, Y)
 
-            # warp data and compute new losses
-            for k, t in enumerate(warps):
-                recon[k] = self.apply_warp(t)
-            losses = sci.linalg.norm(recon - self.data, axis=(1, 2))
+            # t0 = time.time()
+            # warps = self._compute_warping_funcs(X, Y)
+            # # warp data and compute new losses
+            # for k, t in enumerate(warps):
+            #     recon[k] = self.apply_warp(t)
+            # losses = sci.linalg.norm(recon - self.data, axis=(1, 2))
+            # print(time.time() - t0)
+            # assert False
+
+            bcast_interp(self.tref, X, Y, self._new_warps, self._new_pred,
+                         self.template, self._new_losses, self.losses,
+                         self.data)
 
             # update warping parameters for trials with improved loss
-            idx = losses < self.losses
-            self.losses[idx] = losses[idx]
+            idx = self._new_losses < self.losses
+            self.losses[idx] = self._new_losses[idx]
             self.x_knots[idx] = X[idx]
             self.y_knots[idx] = Y[idx]
-            self.warping_funcs[idx] = warps[idx]
-            self.reconstruction[idx] = recon[idx]
+            self.warping_funcs[idx] = self._new_warps[idx]
+            self.reconstruction[idx] = self._new_pred[idx]
             self.loss_hist.append(np.mean(self.losses))
 
     def fit_template(self):
         # compute normal equations
         T = self.n_timepoints
-        WtW_d0 = np.full(T, 1e-5)
+        WtW_d0 = np.full(T, 1e-8)
         WtW_d1 = np.zeros(T-1)
         WtX = np.zeros((T, self.n_features))
         for wfunc, Xk in zip(self.warping_funcs, self.data):
@@ -128,9 +133,9 @@ class AffineWarping(object):
         # update template
         self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
 
-        if self.boundary is not None:
-            self.template[0, :] = self.boundary
-            self.template[-1, :] = self.boundary
+        # if self.boundary is not None:
+        #     self.template[0, :] = self.boundary
+        #     self.template[-1, :] = self.boundary
 
         self.apply_warp = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
 
@@ -157,3 +162,6 @@ class AffineWarping(object):
                          fill_value=self.boundary, assume_sorted=True)
             warped_data[k] = g(f(self.tref))
         return warped_data
+
+    def sort_by_warping(self, ts):
+        return np.argsort(self.warping_funcs[:, ts])
