@@ -6,6 +6,7 @@ def bcast_interp(xtst, X, Y, warps, pred, template, new_loss, last_loss, data):
 
     T = len(xtst)
     N = len(X[0])
+    n_neurons = data.shape[2]
 
     for i in range(len(X)):
 
@@ -29,26 +30,28 @@ def bcast_interp(xtst, X, Y, warps, pred, template, new_loss, last_loss, data):
                 n += 1
 
             # do interpolation and move on to next element in xtst
+            z = y0 + slope*(xtst[m] - x0)
+
+            # clip warp interpolation between zero and one
+            if z < 0:
+                warps[i, m] = 0.0
+                pred[i, m, :] = template[0, :]
+
+            elif z > 1:
+                warps[i, m] = 1.0
+                pred[i, m, :] = template[-1, :]
+
             else:
-                # putative interpolated value
-                z = y0 + slope*(xtst[m] - x0)
+                warps[i, m] = z
+                idx = z * (T-1)
+                rem = idx % 1
+                pred[i, m, :] = (1-rem)*template[int(idx), :] + rem*template[int(idx)+1, :]
 
-                if z < 0:
-                    warps[i, m] = 0.0
-                    pred[i, m] = template[0]
+            # evaluate loss at timepoint m
+            for neu in range(n_neurons):
+                new_loss[i] += (pred[i, m, neu] - data[i, m, neu]) ** 2
 
-                elif z > 1:
-                    warps[i, m] = 1.0
-                    pred[i, m] = template[-1]
-
-                else:
-                    warps[i, m] = z
-                    idx = z * (T-1)
-                    rem = idx % 1
-                    pred[i, m, :] = (1-rem)*template[int(idx), :] + rem*template[int(idx)+1, :]
-
-                    new_loss[i] += ((pred[i, m, :] - data[i, m, :]) ** 2).sum()
-
-                m += 1
+            # move to next timepoint
+            m += 1
 
         new_loss[i] = new_loss[i] ** 0.5

@@ -12,7 +12,7 @@ import time
 class AffineWarping(object):
     """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, data, q1=.3, q2=0, boundary=0, n_knots=0):
+    def __init__(self, data, q1=.3, q2=.15, boundary=0, n_knots=0):
         """
         Params
         ------
@@ -92,15 +92,6 @@ class AffineWarping(object):
             # randomly sample warping functions
             X, Y = self._sample_knots(self.n_trials)
 
-            # t0 = time.time()
-            # warps = self._compute_warping_funcs(X, Y)
-            # # warp data and compute new losses
-            # for k, t in enumerate(warps):
-            #     recon[k] = self.apply_warp(t)
-            # losses = sci.linalg.norm(recon - self.data, axis=(1, 2))
-            # print(time.time() - t0)
-            # assert False
-
             bcast_interp(self.tref, X, Y, self._new_warps, self._new_pred,
                          self.template, self._new_losses, self.losses,
                          self.data)
@@ -111,13 +102,18 @@ class AffineWarping(object):
             self.x_knots[idx] = X[idx]
             self.y_knots[idx] = Y[idx]
             self.warping_funcs[idx] = self._new_warps[idx]
-            self.reconstruction[idx] = self._new_pred[idx]
+            # self.reconstruction[idx] = self._new_pred[idx]
+            # self.loss_hist.append(np.mean(self.losses))
+
+            self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
+            self.resids = self.reconstruction - self.data
+            self.losses = sci.linalg.norm(self.resids, axis=(1, 2))
             self.loss_hist.append(np.mean(self.losses))
 
     def fit_template(self):
         # compute normal equations
         T = self.n_timepoints
-        WtW_d0 = np.full(T, 1e-8)
+        WtW_d0 = np.full(T, 1e-20)
         WtW_d1 = np.zeros(T-1)
         WtX = np.zeros((T, self.n_features))
         for wfunc, Xk in zip(self.warping_funcs, self.data):
@@ -133,9 +129,9 @@ class AffineWarping(object):
         # update template
         self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
 
-        # if self.boundary is not None:
-        #     self.template[0, :] = self.boundary
-        #     self.template[-1, :] = self.boundary
+        if self.boundary is not None:
+            self.template[0, :] = self.boundary
+            self.template[-1, :] = self.boundary
 
         self.apply_warp = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
 
