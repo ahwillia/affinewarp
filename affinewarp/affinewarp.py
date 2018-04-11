@@ -143,20 +143,40 @@ class AffineWarping(object):
 
         return self.template
 
-    def transform(self, data=None):
+    def transform(self, data=None, trials=None):
+
+        # by default, warp the training data
         data = self.data if data is None else data
+        trials = range(self.n_trials) if trials is None else trials
 
-        if len(data) != self.n_trials:
-            raise ValueError('Input must have the same number of trials as fitted data.')
+        if not isinstance(data, np.ndarray):
+            raise ValueError("Argument 'data' should be an ndarray")
 
-        warped_data = np.empty_like(data)
-        for k in range(self.n_trials):
-            f = interp1d(self.warping_funcs[k], self.tref, kind='slinear',
-                         axis=0, bounds_error=False, fill_value='extrapolate',
-                         assume_sorted=True)
-            g = interp1d(self.tref, data[k], axis=0, bounds_error=False,
-                         fill_value=self.boundary, assume_sorted=True)
-            warped_data[k] = g(f(self.tref))
+        # check for singleton dimension
+        elif data.ndim == 2 and data.shape[1] == 1:
+            data = data.ravel()
+
+        if data.ndim == 1:
+            # interpret data as events
+            t = data / self.n_timepoints
+            warped_data = np.empty((len(trials), self.n_timepoints))
+            for i, k in enumerate(trials):
+                warped_data[i] = np.interp(t[k], self.tref, self.warping_funcs[k])
+
+        else:
+            # interpret data as a dense tensor
+            _tref = np.linspace(0, 1, data.shape[1])
+
+            # apply inverse warping function
+            warped_data = np.empty((len(trials), self.n_timepoints))
+            for i, k in enumerate(trials):
+                f = interp1d(self.warping_funcs[k], _tref, kind='slinear',
+                             axis=0, bounds_error=False,
+                             fill_value='extrapolate', assume_sorted=True)
+                g = interp1d(_tref, data[k], axis=0, bounds_error=False,
+                             fill_value=self.boundary, assume_sorted=True)
+                warped_data[i] = g(f(_tref))
+
         return warped_data
 
     def sort_by_warping(self, ts):
