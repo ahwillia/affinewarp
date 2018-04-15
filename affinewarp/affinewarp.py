@@ -36,8 +36,8 @@ class AffineWarping(object):
         self.q2 = q2
 
         # trial-average under affine warping (initialize to random trial)
-        # self.template = data[np.random.randint(0, self.n_trials)].copy()
-        self.template = data.mean(axis=0)
+        self.template = data[np.random.randint(0, self.n_trials)].copy()
+        # self.template = data.mean(axis=0)
         self.tref = np.linspace(0, 1, self.n_timepoints)
         self.dt = self.tref[1]-self.tref[0]
         self.apply_warp = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
@@ -57,7 +57,6 @@ class AffineWarping(object):
 
         # used during fit update
         self._new_warps = np.empty_like(self.warping_funcs)
-        self._new_pred = np.empty_like(self.reconstruction)
         self._new_losses = np.empty_like(self.losses)
 
     def _sample_knots(self, n):
@@ -84,7 +83,7 @@ class AffineWarping(object):
             self.fit_warps(warp_iterations)
             self.fit_template()
             imp = (l0-self.loss_hist[-1])/l0
-            pbar.set_description('Loss improvement: {}%'.format(imp*100))
+            pbar.set_description('Loss improvement: {0:.2f}%'.format(imp*100))
 
     def fit_warps(self, iterations=20):
 
@@ -92,7 +91,7 @@ class AffineWarping(object):
             # randomly sample warping functions
             X, Y = self._sample_knots(self.n_trials)
 
-            bcast_interp(self.tref, X, Y, self._new_warps, self._new_pred,
+            bcast_interp(self.tref, X, Y, self._new_warps,
                          self.template, self._new_losses, self.losses,
                          self.data)
 
@@ -105,15 +104,15 @@ class AffineWarping(object):
             # self.reconstruction[idx] = self._new_pred[idx]
             # self.loss_hist.append(np.mean(self.losses))
 
-            self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
-            self.resids = self.reconstruction - self.data
-            self.losses = sci.linalg.norm(self.resids, axis=(1, 2))
-            self.loss_hist.append(np.mean(self.losses))
+        # self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
+        # self.resids = self.reconstruction - self.data
+        # self.losses = sci.linalg.norm(self.resids, axis=(1, 2))
+        # self.loss_hist.append(np.mean(self.losses))
 
     def fit_template(self):
         # compute normal equations
         T = self.n_timepoints
-        WtW_d0 = np.full(T, 1e-20)
+        WtW_d0 = np.full(T, 1e-3)
         WtW_d1 = np.zeros(T-1)
         WtX = np.zeros((T, self.n_features))
         for wfunc, Xk in zip(self.warping_funcs, self.data):
@@ -127,6 +126,8 @@ class AffineWarping(object):
             _reduce_sum_assign_matrix(WtX, i+1, lam[:, None] * Xk)
 
         # update template
+        # A = np.diag(WtW_d1, -1) + np.diag(WtW_d0) + np.diag(WtW_d1, 1)
+        # self.template = np.linalg.solve(A, WtX)
         self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
 
         if self.boundary is not None:
@@ -164,13 +165,14 @@ class AffineWarping(object):
                 warped_data[i] = np.interp(t[k], self.tref, self.warping_funcs[k])
 
         else:
-            # interpret data as a dense tensor
+            # interpret data as a dense tensor, allow for variable sampling rate.
             _tref = np.linspace(0, 1, data.shape[1])
 
             # apply inverse warping function
-            warped_data = np.empty((len(trials), self.n_timepoints))
+            warped_data = np.empty((len(trials), data.shape[1], data.shape[2]))
             for i, k in enumerate(trials):
-                f = interp1d(self.warping_funcs[k], _tref, kind='slinear',
+                wfk = np.interp(_tref, self.tref, self.warping_funcs[k])
+                f = interp1d(wfk, _tref, kind='slinear',
                              axis=0, bounds_error=False,
                              fill_value='extrapolate', assume_sorted=True)
                 g = interp1d(_tref, data[k], axis=0, bounds_error=False,
