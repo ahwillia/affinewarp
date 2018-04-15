@@ -12,7 +12,8 @@ import time
 class AffineWarping(object):
     """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, data, q1=.3, q2=.15, boundary=0, n_knots=0):
+    def __init__(self, data, q1=.3, q2=.15, boundary=0, n_knots=0,
+                 l2_smoothness=0):
         """
         Params
         ------
@@ -34,6 +35,8 @@ class AffineWarping(object):
         self.n_knots = n_knots
         self.q1 = q1
         self.q2 = q2
+
+        self.l2_smoothness = l2_smoothness
 
         # trial-average under affine warping (initialize to random trial)
         self.template = data[np.random.randint(0, self.n_trials)].copy()
@@ -112,15 +115,34 @@ class AffineWarping(object):
     def fit_template(self):
         # compute normal equations
         T = self.n_timepoints
-        WtW_d0 = np.full(T, 1e-3)
-        WtW_d1 = np.zeros(T-1)
+
+        if self.l2_smoothness > 0:
+            # coefficent matrix for the template update reduce to a
+            # banded matrix with 5 diagonals.
+            WtW = np.zeros((3, T))
+            WtW[0, 2:] = 1.0 * self.l2_smoothness
+            WtW[1, 2:] = -4.0 * self.l2_smoothness
+            WtW[1, 1] = -2.0 * self.l2_smoothness
+            WtW[2, 2:] = 6.0 * self.l2_smoothness
+            WtW[2, 1] = 5.0 * self.l2_smoothness
+            WtW[2, 0] = 1.0 * self.l2_smoothness
+            _WtW = WtW[1:, :]
+        else:
+            # coefficent matrix for the template update reduce to a
+            # banded matrix with 3 diagonals.
+            WtW = np.zeros((2, T))
+            _WtW = WtW
+
+        # WtW_d0 = np.full(T, 1e-3)
+        # WtW_d1 = np.zeros(T-1)
         WtX = np.zeros((T, self.n_features))
+
         for wfunc, Xk in zip(self.warping_funcs, self.data):
             lam, i = modf(wfunc * (T-1))
 
-            _reduce_sum_assign(WtW_d0, i, (1-lam)**2)
-            _reduce_sum_assign(WtW_d0, i+1, lam**2)
-            _reduce_sum_assign(WtW_d1, i, lam*(1-lam))
+            _reduce_sum_assign(_WtW[1, :], i, (1-lam)**2)
+            _reduce_sum_assign(_WtW[1, :], i+1, lam**2)
+            _reduce_sum_assign(_WtW[0, 1:], i, lam*(1-lam))
 
             _reduce_sum_assign_matrix(WtX, i, (1-lam[:, None]) * Xk)
             _reduce_sum_assign_matrix(WtX, i+1, lam[:, None] * Xk)
@@ -128,7 +150,8 @@ class AffineWarping(object):
         # update template
         # A = np.diag(WtW_d1, -1) + np.diag(WtW_d0) + np.diag(WtW_d1, 1)
         # self.template = np.linalg.solve(A, WtX)
-        self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
+        # self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
+        self.template = sci.linalg.solveh_banded(WtW, WtX, overwrite_ab=True, overwrite_b=True)
 
         if self.boundary is not None:
             self.template[0, :] = self.boundary
