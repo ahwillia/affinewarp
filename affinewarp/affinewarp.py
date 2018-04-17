@@ -4,6 +4,7 @@ from scipy.optimize import minimize
 import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _reduce_sum_assign, _reduce_sum_assign_matrix
+from tslearn.barycenters import SoftDTWBarycenter
 from .tridiag import trisolve
 from .interp import bcast_interp
 import time
@@ -25,6 +26,7 @@ class AffineWarping(object):
             raise ValueError('Number of knots must be nonnegative.')
 
         # data dimensions
+        data = data.astype(float)
         self.data = data
         self.n_trials = data.shape[0]
         self.n_timepoints = data.shape[1]
@@ -39,6 +41,7 @@ class AffineWarping(object):
         self.l2_smoothness = l2_smoothness
 
         # trial-average under affine warping (initialize to random trial)
+        # self.template = SoftDTWBarycenter(gamma=1, max_iter=100).fit(data)
         self.template = data[np.random.randint(0, self.n_trials)].copy()
         # self.template = data.mean(axis=0)
         self.tref = np.linspace(0, 1, self.n_timepoints)
@@ -87,6 +90,8 @@ class AffineWarping(object):
             self.fit_template()
             imp = (l0-self.loss_hist[-1])/l0
             pbar.set_description('Loss improvement: {0:.2f}%'.format(imp*100))
+
+        return self
 
     def fit_warps(self, iterations=20):
 
@@ -167,7 +172,7 @@ class AffineWarping(object):
 
         return self.template
 
-    def transform(self, data=None, trials=None):
+    def transform_analog(self, data=None, trials=None):
 
         # by default, warp the training data
         data = self.data if data is None else data
@@ -180,29 +185,26 @@ class AffineWarping(object):
         elif data.ndim == 2 and data.shape[1] == 1:
             data = data.ravel()
 
-        if data.ndim == 1:
-            # interpret data as events
-            t = data / self.n_timepoints
-            warped_data = np.empty((len(trials), self.n_timepoints))
-            for i, k in enumerate(trials):
-                warped_data[i] = np.interp(t[k], self.tref, self.warping_funcs[k])
+        # interpret data as a dense tensor, allow for variable sampling rate.
+        _tref = np.linspace(0, 1, data.shape[1])
 
-        else:
-            # interpret data as a dense tensor, allow for variable sampling rate.
-            _tref = np.linspace(0, 1, data.shape[1])
-
-            # apply inverse warping function
-            warped_data = np.empty((len(trials), data.shape[1], data.shape[2]))
-            for i, k in enumerate(trials):
-                wfk = np.interp(_tref, self.tref, self.warping_funcs[k])
-                f = interp1d(wfk, _tref, kind='slinear',
-                             axis=0, bounds_error=False,
-                             fill_value='extrapolate', assume_sorted=True)
-                g = interp1d(_tref, data[k], axis=0, bounds_error=False,
-                             fill_value=self.boundary, assume_sorted=True)
-                warped_data[i] = g(f(_tref))
+        # apply inverse warping function
+        warped_data = np.zeros((len(trials), data.shape[1], data.shape[2]))
+        for i, k in enumerate(trials):
+            wfk = np.interp(_tref, self.tref, self.warping_funcs[k])
+            f = interp1d(wfk, _tref, kind='slinear',
+                         axis=0, bounds_error=False,
+                         fill_value='extrapolate', assume_sorted=True)
+            g = interp1d(_tref, data[k], axis=0, bounds_error=False,
+                         fill_value=self.boundary, assume_sorted=True)
+            warped_data[i] = g(f(_tref))
 
         return warped_data
 
-    def sort_by_warping(self, ts):
-        return np.argsort(self.warping_funcs[:, ts])
+    def transform_events(self, data):
+        # interpret data as events
+        k, t, n = np.where(data)
+        t_out = (self.warping_funcs[k, t] * (self.n_timepoints-1e-6)).astype(int)
+        data_out = np.zeros_like(data)
+        data_out[k, t_out, n] = 1.0
+        return data_out
