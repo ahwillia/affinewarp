@@ -6,12 +6,12 @@ from tqdm import trange, tqdm
 from .utils import modf, _reduce_sum_assign, _reduce_sum_assign_matrix
 from tslearn.barycenters import SoftDTWBarycenter
 from .tridiag import trisolve
-from .interp import bcast_interp
+from .interp import bcast_interp, interp_knots
 import time
 
 
 class AffineWarping(object):
-    """Represents a collection of time series, each with an affine time warp.
+    """Piecewise Affine Time Warping applied to an analog (dense) time series.
     """
     def __init__(self, data, q1=.3, q2=.15, boundary=0, n_knots=0,
                  l2_smoothness=0):
@@ -26,7 +26,6 @@ class AffineWarping(object):
             raise ValueError('Number of knots must be nonnegative.')
 
         # data dimensions
-        data = data.astype(float)
         self.data = data
         self.n_trials = data.shape[0]
         self.n_timepoints = data.shape[1]
@@ -42,7 +41,7 @@ class AffineWarping(object):
 
         # trial-average under affine warping (initialize to random trial)
         # self.template = SoftDTWBarycenter(gamma=1, max_iter=100).fit(data)
-        self.template = data[np.random.randint(0, self.n_trials)].copy()
+        self.template = data[np.random.randint(0, self.n_trials)].astype(float)
         # self.template = data.mean(axis=0)
         self.tref = np.linspace(0, 1, self.n_timepoints)
         self.dt = self.tref[1]-self.tref[0]
@@ -66,18 +65,19 @@ class AffineWarping(object):
         self._new_losses = np.empty_like(self.losses)
 
     def _sample_knots(self, n):
-        """Randomly sample warping functions
+        """Randomly sample warping functions.
         """
-        x = np.column_stack((np.zeros(n), np.sort(np.random.rand(n, self.n_knots)), np.ones(n)))
-        y = np.column_stack((np.zeros(n), np.sort(np.random.rand(n, self.n_knots)), np.ones(n)))
+        x = np.column_stack((np.zeros(n),
+                             np.sort(np.random.rand(n, self.n_knots)),
+                             np.ones(n)))
+        y = np.column_stack((np.zeros(n),
+                             np.sort(np.random.rand(n, self.n_knots)),
+                             np.ones(n)))
         y = self.q1*y + (1-self.q1)*x
 
         y0 = np.random.uniform(-self.q2, self.q2, size=(n, 1))
         y1 = np.random.uniform(1-self.q2, 1+self.q2, size=(n, 1))
         y = (y1-y0)*y + y0
-
-        self.warp_time = 0
-        self.fit_time = 0
 
         return x, y
 
@@ -109,13 +109,7 @@ class AffineWarping(object):
             self.x_knots[idx] = X[idx]
             self.y_knots[idx] = Y[idx]
             self.warping_funcs[idx] = self._new_warps[idx]
-            # self.reconstruction[idx] = self._new_pred[idx]
-            # self.loss_hist.append(np.mean(self.losses))
 
-        # self.reconstruction = np.array([self.apply_warp(t) for t in self.warping_funcs])
-        # self.resids = self.reconstruction - self.data
-        # self.losses = sci.linalg.norm(self.resids, axis=(1, 2))
-        # self.loss_hist.append(np.mean(self.losses))
 
     def fit_template(self):
         # compute normal equations
@@ -152,10 +146,6 @@ class AffineWarping(object):
             _reduce_sum_assign_matrix(WtX, i, (1-lam[:, None]) * Xk)
             _reduce_sum_assign_matrix(WtX, i+1, lam[:, None] * Xk)
 
-        # update template
-        # A = np.diag(WtW_d1, -1) + np.diag(WtW_d0) + np.diag(WtW_d1, 1)
-        # self.template = np.linalg.solve(A, WtX)
-        # self.template = trisolve(WtW_d1, WtW_d0, WtW_d1, WtX)
         self.template = sci.linalg.solveh_banded(WtW, WtX, overwrite_ab=True, overwrite_b=True)
 
         if self.boundary is not None:
@@ -172,39 +162,22 @@ class AffineWarping(object):
 
         return self.template
 
-    def transform_analog(self, data=None, trials=None):
+    # def transform_events(self, k, t):
+    #     """Apply inverse warping functions to events.
+    #     """
+    #     assert len(k) == len(t)
 
-        # by default, warp the training data
-        data = self.data if data is None else data
-        trials = range(self.n_trials) if trials is None else trials
+    #     T = self.n_timepoints
+    #     lam, i = modf(t * (T-1))
 
-        if not isinstance(data, np.ndarray):
-            raise ValueError("Argument 'data' should be an ndarray")
+    #     t_out = self.warping_funcs[k, i]*(1-lam) + \
+    #         self.warping_funcs[k, (i+1) % T]*(lam)
 
-        # check for singleton dimension
-        elif data.ndim == 2 and data.shape[1] == 1:
-            data = data.ravel()
+    #     return t_out
 
-        # interpret data as a dense tensor, allow for variable sampling rate.
-        _tref = np.linspace(0, 1, data.shape[1])
+    def transform_events(self, k, t):
+        """Apply inverse warping functions to events.
+        """
+        assert len(k) == len(t)
 
-        # apply inverse warping function
-        warped_data = np.zeros((len(trials), data.shape[1], data.shape[2]))
-        for i, k in enumerate(trials):
-            wfk = np.interp(_tref, self.tref, self.warping_funcs[k])
-            f = interp1d(wfk, _tref, kind='slinear',
-                         axis=0, bounds_error=False,
-                         fill_value='extrapolate', assume_sorted=True)
-            g = interp1d(_tref, data[k], axis=0, bounds_error=False,
-                         fill_value=self.boundary, assume_sorted=True)
-            warped_data[i] = g(f(_tref))
-
-        return warped_data
-
-    def transform_events(self, data):
-        # interpret data as events
-        k, t, n = np.where(data)
-        t_out = (self.warping_funcs[k, t] * (self.n_timepoints-1e-6)).astype(int)
-        data_out = np.zeros_like(data)
-        data_out[k, t_out, n] = 1.0
-        return data_out
+        return interp_knots(self.x_knots, self.y_knots, k, t)

@@ -1,7 +1,61 @@
-from numba import jit, f8, int32, void
+from numba import jit, f8, int8, void
+import numpy as np
 
 
-@jit(void(f8[:], f8[:, :], f8[:, :], f8[:, :], f8[:, :], f8[:], f8[:], f8[:, :, :]), nopython=True)
+def interp_knots(_X, _Y, trials, xtst):
+    """
+
+    Parameters
+    ----------
+    X : x coordinates of knots for each trial (shape: trials x n_knots)
+    Y : y coordinates of knots for each trial (shape: trials x n_knots)
+    xtst : queried x coordinate for each trial (shape: trials)
+
+    Note:
+        X is assumed to be sorted along axis=1
+
+    Returns
+    -------
+    ytst : interpolated y value for each x in xtst (shape: trials)
+    """
+
+    X = _X[trials]
+    Y = _Y[trials]
+
+    # allocate result
+    ytst = np.empty_like(xtst)
+
+    # for each trial (row of X) find first knot larger than test point
+    p = np.argmin(xtst[:, None] > X, axis=1)
+
+    # make sure that we never try to interpolate to the left of
+    # X[:,0] to avoid out-of-bounds error. Test points requiring
+    # extrapolation are clipped (see below).
+    np.maximum(1, p, out=p)
+
+    # indexing vector along trials (used to index with p)
+    k = np.arange(len(p))
+
+    # distance between adjacent knots
+    dx = np.diff(_X, axis=1)[trials]
+
+    # fractional distance of test points between knots
+    lam = (xtst - X[k, p-1]) / dx[k, p-1]
+
+    # linear interpolation
+    ytst = (Y[k, p-1]*(1-lam)) + (Y[k, p]*(lam))
+
+    # clip test values below X[:, 0] or above X[:, -1]
+    idx = lam > 1
+    ytst[idx] = Y[idx, -1]
+    idx = lam < 0
+    ytst[idx] = Y[idx, 0]
+
+    return ytst
+
+
+# @jit(void(f8[:], f8[:, :], f8[:, :], f8[:, :], f8[:, :], f8[:], f8[:], int8[:, :, :]), nopython=True)
+@jit(nopython=True)
 def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data):
 
     T = len(xtst)
@@ -66,3 +120,4 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data):
             m += 1
 
         new_loss[i] = new_loss[i] ** 0.5
+

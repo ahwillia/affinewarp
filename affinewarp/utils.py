@@ -6,7 +6,7 @@ def modf(U):
     """Return the fractional and integral parts of an array, element-wise.
 
     Note:
-        nearly the same as numpy.modf but returns integer types
+        nearly the same as numpy.modf but returns integer type for i
 
     Parameters
     ----------
