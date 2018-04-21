@@ -1,29 +1,39 @@
 import numpy as np
 from affinewarp import AffineWarping
+from .utils import spiketimes_per_neuron, bin_count_data
+from tqdm import trange
 
 
-def crossval_neurons(data, **kwargs):
+def crossval_neurons(data, nbins, **model_params):
 
-    # trials, timepoints, features
-    K, T, N = data.shape
+    # bin data
+    binned = bin_count_data(data, nbins)
 
-    # holds transformed data
-    tfm = np.empty_like(data)
-    all_models = []
+    # convert to spike time lists
+    trials, spikes = spiketimes_per_neuron(data)
+
+    # data dimensions
+    n_trials, _, n_neurons = binned.shape
+
+    # model
+    model = AffineWarping(**model_params)
+
+    # transformed spike times
+    tfm_spikes = []
+    model_params = []
 
     # hold out each feature, and compute its transforms
-    modeldicts = []
-    for n in range(N):
+    for n in trange(n_neurons):
 
-        # fit on training data
-        trainset = list(set(range(N)) - {n})
-        model = AffineWarping(data[:, :, trainset])
-        model.fit()
+        # define training set
+        trainset = list(set(range(n_neurons)) - {n})
+        model.initialize_fit(binned[:, :, trainset])
+
+        # fit model and save parameters
+        model.fit(verbose=False)
+        model_params.append(model.dump_params())
 
         # warp test set
-        tfm[:, :, n] = model.transform(data[:, :, n])
+        tfm_spikes.append(model.transform_events(trials[n], spikes[n]))
 
-        # save other data
-        all_models.append(model)
-
-    return tfm, all_models
+    return trials, spikes, tfm_spikes, model_params
