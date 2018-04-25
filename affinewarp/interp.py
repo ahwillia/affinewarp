@@ -56,25 +56,32 @@ def interp_knots(_X, _Y, trials, xtst):
 
 # @jit(void(f8[:], f8[:, :], f8[:, :], f8[:, :], f8[:, :], f8[:], f8[:], int8[:, :, :]), nopython=True)
 @jit(nopython=True)
-def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data):
+def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons):
 
+    # number of interpolated points
     T = len(xtst)
-    N = len(X[0])
-    n_neurons = data.shape[2]
 
+    # number discontinuities in piecewise linear function
+    N = len(X[0])
+
+    # iterate over trials
     for i in range(len(X)):
 
-        # do interpolation
+        # initialize line segement for interpolation
         y0 = Y[i, 0]
         x0 = X[i, 0]
         slope = (Y[i, 1] - Y[i, 0]) / (X[i, 1] - X[i, 0])
 
+        # 'm' counts the timebins within trial 'i'.
+        # 'n' counts knots in piecewise affine warping function.
         m = 0
         n = 1
 
+        # compute loss for trial i
         new_loss[i] = 0
         thres = last_loss[i]**2
 
+        # iterate over all time bins, stop early if loss is too high.
         while (m < T) and (new_loss[i] < thres):
 
             # update interpolation point
@@ -92,14 +99,14 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data):
                 warps[i, m] = 0.0
 
                 # evaluate loss at first index
-                for neu in range(n_neurons):
+                for neu in neurons:
                     new_loss[i] += (template[0, neu] - data[i, m, neu]) ** 2
 
             elif z > 1:
                 warps[i, m] = 1.0
 
                 # evaluate loss at last index
-                for neu in range(n_neurons):
+                for neu in neurons:
                     new_loss[i] += (template[-1, neu] - data[i, m, neu]) ** 2
 
             else:
@@ -109,7 +116,7 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data):
                 idx = int(_i)
 
                 # evaluate loss at interpolant
-                for neu in range(n_neurons):
+                for neu in neurons:
                     new_loss[i] += (
                         (1 - rem) * template[idx, neu] +
                         rem * template[idx + 1, neu] -
@@ -119,5 +126,5 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data):
             # move to next timepoint
             m += 1
 
+        # Finish l2 norm calculation for trial i
         new_loss[i] = new_loss[i] ** 0.5
-
