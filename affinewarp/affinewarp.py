@@ -1,9 +1,8 @@
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.optimize import minimize
 import scipy as sci
 from tqdm import trange, tqdm
-from .utils import modf, _fast_template_grams
+from .utils import modf, _fast_template_grams, quad_loss
 from .interp import bcast_interp, interp_knots
 
 
@@ -76,7 +75,7 @@ class AffineWarping(object):
         self.warping_funcs = np.tile(self.tref, (K, 1))
 
         # update loss
-        self._losses = sci.linalg.norm(self.predict() - data, axis=(1, 2))
+        self._losses = quad_loss(self.predict(), data)
         self.loss_hist = [np.mean(self._losses)]
 
         # arrays used in fit_warps function
@@ -195,7 +194,7 @@ class AffineWarping(object):
         )
 
         # update reconstruction and evaluate loss
-        self._losses = sci.linalg.norm(self.predict() - data, axis=(1, 2))
+        self._losses = quad_loss(self.predict(), data)
         self.loss_hist.append(np.mean(self._losses))
 
         return self.template

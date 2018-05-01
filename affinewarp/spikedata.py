@@ -1,4 +1,6 @@
+import numpy as np
 from numba import jit
+from scipy.stats import rankdata
 
 
 class SpikeData(object):
@@ -27,7 +29,7 @@ class SpikeData(object):
         # renumber neurons sequentially (like trials), but since neurons isn't
         # sorted we have to resort to scipy.stats.rankdata.
         neurons = rankdata(neurons, method='dense') - 1
-        self.n_neurons = np.max(neurons)
+        self.n_neurons = np.max(neurons) + 1
 
         # store spike time data
         self.trials = trials
@@ -114,15 +116,15 @@ class SpikeData(object):
     def bin_spikes(self, nbins, tmin=None, tmax=None):
 
         # determine trial start and stop
-        tmin = times.min()-1e-6 if tmin is None else tmin
-        tmax = times.max()+1e-6 if tmax is None else tmax
+        tmin = self.times.min()-1e-6 if tmin is None else tmin
+        tmax = self.times.max()+1e-6 if tmax is None else tmax
 
         # compute bin size
         binsize = (tmax - tmin) / nbins
 
         # bin spikes
         binned = np.zeros((self.n_trials, nbins, self.n_neurons))
-        _fast_bin(binned, trials, times, neurons, tmin, binsize)
+        _fast_bin(binned, self.trials, self.times, self.neurons, tmin, binsize)
 
         # return (trials x timebins x neurons) array of binned spike counts
         return binned
@@ -130,7 +132,7 @@ class SpikeData(object):
     @property
     def n_trials(self):
         # number of trials is always the last element in trial vector
-        return self.trials[-1]
+        return self.trials[-1] + 1
 
 
 @jit(nopython=True)
@@ -180,7 +182,7 @@ def _sequentially_renumber(X):
     """
     n = 0
     for i in range(X.size-1):
-        if X[i+1] < X[i]:
+        if X[i+1] > X[i]:
             X[i] = n
             n = n+1
         else:
@@ -198,7 +200,7 @@ def is_sorted(X):
     return True
 
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def _fast_bin(out, k, t, n, tmin, binsize):
     for i in range(len(k)):
         # compute bin

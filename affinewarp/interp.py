@@ -1,4 +1,4 @@
-from numba import jit, f8, int8, void
+from numba import jit
 import numpy as np
 
 
@@ -63,6 +63,9 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
     # number discontinuities in piecewise linear function
     N = len(X[0])
 
+    # normalizing divisor for average loss across each trial
+    denom = data.shape[1] * data.shape[2]
+
     # iterate over trials
     for i in range(len(X)):
 
@@ -78,10 +81,9 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
 
         # compute loss for trial i
         new_loss[i] = 0
-        thres = last_loss[i]**2
 
         # iterate over all time bins, stop early if loss is too high.
-        while (m < T) and (new_loss[i] < thres):
+        while (m < T) and (new_loss[i] < last_loss[i]):
 
             # update interpolation point
             while (n < N-1) and (m/(T-1) > X[i, n]):
@@ -99,14 +101,14 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
 
                 # evaluate loss at first index
                 for neu in neurons:
-                    new_loss[i] += (template[0, neu] - data[i, m, neu]) ** 2
+                    new_loss[i] += ((template[0, neu] - data[i, m, neu]) ** 2) / denom
 
             elif z > 1:
                 warps[i, m] = 1.0
 
                 # evaluate loss at last index
                 for neu in neurons:
-                    new_loss[i] += (template[-1, neu] - data[i, m, neu]) ** 2
+                    new_loss[i] += ((template[-1, neu] - data[i, m, neu]) ** 2) / denom
 
             else:
                 warps[i, m] = z
@@ -116,14 +118,11 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
 
                 # evaluate loss at interpolant
                 for neu in neurons:
-                    new_loss[i] += (
+                    new_loss[i] += ((
                         (1 - rem) * template[idx, neu] +
                         rem * template[idx + 1, neu] -
                         data[i, m, neu]
-                    ) ** 2
+                    ) ** 2) / denom
 
             # move to next timepoint
             m += 1
-
-        # Finish l2 norm calculation for trial i
-        new_loss[i] = new_loss[i] ** 0.5

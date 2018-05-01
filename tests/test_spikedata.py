@@ -17,6 +17,11 @@ def test_is_sorted():
 def test_seq_renumbering():
     np.random.seed(1234)
 
+    foo = np.array([1, 2, 3, 4])
+    _sequentially_renumber(foo)
+    for i in range(len(foo)):
+        assert foo[i] == i
+
     for _ in range(100):
         foo = np.random.randint(10, size=100)
         foo.sort()

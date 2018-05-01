@@ -43,3 +43,9 @@ def _fast_template_grams(WtW, WtX, unf, lam, i):
             WtW[1, i[j]+1] += lam[j]**2
             WtW[0, i[j]+1] += mlam * lam[j]
             WtX[i[j]+1] += lam[j] * unf[j]
+
+
+def quad_loss(pred, targ):
+    """Row-wise mean squared Euclidean error between prediction and target array
+    """
+    return np.mean(((pred - targ)**2).reshape(pred.shape[0], -1), axis=-1)

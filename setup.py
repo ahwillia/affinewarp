@@ -9,7 +9,7 @@ setuptools.setup(
     author_email="ahwillia@stanford.edu",
 
     description="Time warping under affine warping functions",
-    long_description=open('README.rst').read(),
+    # long_description=open('README.rst').read(),
 
     packages=setuptools.find_packages(),
 
