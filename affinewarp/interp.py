@@ -54,7 +54,6 @@ def interp_knots(_X, _Y, trials, xtst):
     return ytst
 
 
-# @jit(void(f8[:], f8[:, :], f8[:, :], f8[:, :], f8[:, :], f8[:], f8[:], int8[:, :, :]), nopython=True)
 @jit(nopython=True)
 def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons):
 

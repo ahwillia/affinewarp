@@ -3,7 +3,7 @@ from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 import scipy as sci
 from tqdm import trange, tqdm
-from .utils import bin_count_data, modf, _fast_template_grams
+from .utils import modf, _fast_template_grams
 from tslearn.barycenters import SoftDTWBarycenter
 from .interp import bcast_interp, interp_knots
 

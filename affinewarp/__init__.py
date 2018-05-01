@@ -6,3 +6,4 @@ __author__ = 'Alex Williams <ahwillia@stanford.edu>'
 from .affinewarp import AffineWarping
 from .shiftwarp import ShiftWarping
 from .crossval import crossval_neurons
+from .spikedata import SpikeData

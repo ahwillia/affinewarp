@@ -1,6 +1,5 @@
 import numpy as np
 from affinewarp import AffineWarping
-from .utils import spiketimes_per_neuron, bin_count_data
 from tqdm import trange
 
 
@@ -29,10 +28,10 @@ def crossval_neurons(data, nbins, **model_params):
     model = AffineWarping(**model_params)
 
     # bin data
-    binned = bin_count_data(data, nbins)
+    # binned = bin_count_data(data, nbins)
 
     # convert to spike time lists
-    trials, spikes = spiketimes_per_neuron(data)
+    # trials, spikes = spiketimes_per_neuron(data)
 
     # data dimensions
     n_trials, _, n_neurons = binned.shape
