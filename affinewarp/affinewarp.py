@@ -4,6 +4,19 @@ import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _fast_template_grams, quad_loss
 from .interp import bcast_interp, interp_knots
+from numba import jit
+
+
+# elementwise quadratic loss
+@jit
+def _elemwise_quad(x, y):
+    return (x - y)**2
+
+
+# elementwise poisson loss
+@jit
+def _elemwise_poiss(x, y):
+    return (x - y)**2
 
 
 class AffineWarping(object):
@@ -144,7 +157,7 @@ class AffineWarping(object):
             # Note: this is the bulk of computation time.
             bcast_interp(self.tref, X, Y, self._new_warps,
                          self.template, self._new_losses, self._losses,
-                         data, neurons)
+                         data, neurons, _elemwise_quad)
 
             # update warping parameters for trials with improved loss
             idx = self._new_losses < self._losses

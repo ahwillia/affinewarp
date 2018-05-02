@@ -55,7 +55,7 @@ def interp_knots(_X, _Y, trials, xtst):
 
 
 @jit(nopython=True)
-def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons):
+def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons, lossfunc):
 
     # number of interpolated points
     T = len(xtst)
@@ -101,14 +101,16 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
 
                 # evaluate loss at first index
                 for neu in neurons:
-                    new_loss[i] += ((template[0, neu] - data[i, m, neu]) ** 2) / denom
+                    # new_loss[i] += ((template[0, neu] - data[i, m, neu]) ** 2) / denom
+                    new_loss[i] += lossfunc(template[0, neu], data[i, m, neu]) / denom
 
             elif z > 1:
                 warps[i, m] = 1.0
 
                 # evaluate loss at last index
                 for neu in neurons:
-                    new_loss[i] += ((template[-1, neu] - data[i, m, neu]) ** 2) / denom
+                    # new_loss[i] += ((template[-1, neu] - data[i, m, neu]) ** 2) / denom
+                    new_loss[i] += lossfunc(template[-1, neu], data[i, m, neu]) / denom
 
             else:
                 warps[i, m] = z
@@ -118,11 +120,14 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
 
                 # evaluate loss at interpolant
                 for neu in neurons:
-                    new_loss[i] += ((
-                        (1 - rem) * template[idx, neu] +
-                        rem * template[idx + 1, neu] -
-                        data[i, m, neu]
-                    ) ** 2) / denom
+                    # new_loss[i] += ((
+                    #     (1 - rem) * template[idx, neu] +
+                    #     rem * template[idx + 1, neu] -
+                    #     data[i, m, neu]
+                    # ) ** 2) / denom
+                    new_loss[i] += lossfunc((1 - rem) * template[idx, neu] + rem * template[idx + 1, neu],
+                                            data[i, m, neu]) / denom
+
 
             # move to next timepoint
             m += 1
