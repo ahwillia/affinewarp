@@ -2,14 +2,15 @@ from numba import jit
 import numpy as np
 
 
-def interp_knots(_X, _Y, trials, xtst):
+def sparsewarp(_X, _Y, trials, xtst):
     """
 
     Parameters
     ----------
-    X : x coordinates of knots for each trial (shape: trials x n_knots)
-    Y : y coordinates of knots for each trial (shape: trials x n_knots)
-    xtst : queried x coordinate for each trial (shape: trials)
+    X : x coordinates of knots for each trial (shape: n_trials x n_knots)
+    Y : y coordinates of knots for each trial (shape: n_trials x n_knots)
+    trials : int trial id for each coordinate (shape: n_trials)
+    xtst : queried x coordinate for each trial (shape: n_trials)
 
     Note:
         X is assumed to be sorted along axis=1
@@ -18,7 +19,6 @@ def interp_knots(_X, _Y, trials, xtst):
     -------
     ytst : interpolated y value for each x in xtst (shape: trials)
     """
-
     X = _X[trials]
     Y = _Y[trials]
 
@@ -55,7 +55,51 @@ def interp_knots(_X, _Y, trials, xtst):
 
 
 @jit(nopython=True)
-def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons, lossfunc):
+def densewarp(X, Y, data, out):
+
+    K = data.shape[0]
+    T = data.shape[1]
+    n_knots = X.shape[1]
+
+    for k in range(K):
+
+        # initialize line segement for interpolation
+        y0 = Y[k, 0]
+        x0 = X[k, 0]
+        slope = (Y[k, 1] - Y[k, 0]) / (X[k, 1] - X[k, 0])
+
+        # 'n' counts knots in piecewise affine warping function.
+        n = 1
+
+        # iterate over all time bins, stop early if loss is too high.
+        for t in range(T):
+
+            # update interpolation point
+            while (t/(T-1) > X[k, n]) and (n < n_knots-1):
+                n += 1
+                y0 = Y[k, n]
+                x0 = X[k, n]
+                slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
+
+            z = y0 + slope*((t/(T-1)) - x0)
+            # import pdb
+            # pdb.set_trace()
+
+            if z < 0:
+                out[k, t] = data[k, 0]
+            elif z > 1:
+                out[k, t] = data[k, -1]
+            else:
+                _i = z * (T-1)
+                rem = _i % 1
+                i = int(_i)
+                out[k, t] = (1-rem) * data[k, i] + rem * data[k, i+1]
+
+    return out
+
+
+@jit(nopython=True)
+def warp_with_loss(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons, lossfunc):
 
     # number of interpolated points
     T = len(xtst)
@@ -127,7 +171,6 @@ def bcast_interp(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons
                     # ) ** 2) / denom
                     new_loss[i] += lossfunc((1 - rem) * template[idx, neu] + rem * template[idx + 1, neu],
                                             data[i, m, neu]) / denom
-
 
             # move to next timepoint
             m += 1

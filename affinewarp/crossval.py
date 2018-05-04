@@ -1,6 +1,7 @@
 import numpy as np
 from affinewarp import AffineWarping
 from tqdm import trange
+import sparse
 
 
 def kfold(N, n_splits):
@@ -22,22 +23,15 @@ def kfold(N, n_splits):
         i += 1
 
 
-def crossval_neurons(data, nbins, **model_params):
+def crossval_neurons(model, data, binned, **kwargs):
 
-    # model object
-    model = AffineWarping(**model_params)
-
-    # bin data
-    # binned = bin_count_data(data, nbins)
-
-    # convert to spike time lists
-    # trials, spikes = spiketimes_per_neuron(data)
+    kwargs.setdefault('verbose', False)
 
     # data dimensions
-    n_trials, _, n_neurons = binned.shape
+    n_neurons = binned.shape[-1]
 
     # transformed spike times
-    tfm_spikes = []
+    aligned_data = []
     results = []
 
     # hold out each feature, and compute its transforms
@@ -47,13 +41,15 @@ def crossval_neurons(data, nbins, **model_params):
         trainset = list(set(range(n_neurons)) - {n})
 
         # fit model and save parameters
-        model.fit(binned[:, :, trainset], verbose=False)
+        model.fit(binned[:, :, trainset], **kwargs)
         results.append(model.dump_params())
 
         # warp test set
-        tfm_spikes.append(model.transform_events(trials[n], spikes[n]))
+        aligned_data.append(model.transform(data[:, :, n]))
 
-    return trials, spikes, tfm_spikes, results
+    aligned_data = sparse.concatenate(aligned_data, axis=2)
+
+    return aligned_data, results
 
 
 def hyperparam_search(data, n_models=10, frac_test_trials=.25,

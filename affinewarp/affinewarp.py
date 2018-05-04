@@ -3,20 +3,9 @@ from scipy.interpolate import interp1d
 import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _fast_template_grams, quad_loss
-from .interp import bcast_interp, interp_knots
+from .interp import warp_with_loss, densewarp, sparsewarp
 from numba import jit
-
-
-# elementwise quadratic loss
-@jit
-def _elemwise_quad(x, y):
-    return (x - y)**2
-
-
-# elementwise poisson loss
-@jit
-def _elemwise_poiss(x, y):
-    return (x - y)**2
+import sparse
 
 
 class AffineWarping(object):
@@ -155,9 +144,9 @@ class AffineWarping(object):
             X, Y = self._sample_knots(data.shape[0])
 
             # Note: this is the bulk of computation time.
-            bcast_interp(self.tref, X, Y, self._new_warps,
-                         self.template, self._new_losses, self._losses,
-                         data, neurons, _elemwise_quad)
+            warp_with_loss(self.tref, X, Y, self._new_warps,
+                           self.template, self._new_losses, self._losses,
+                           data, neurons, _elemwise_quad)
 
             # update warping parameters for trials with improved loss
             idx = self._new_losses < self._losses
@@ -223,9 +212,52 @@ class AffineWarping(object):
         f = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
         return np.asarray([f(t) for t in self.warping_funcs])
 
-    def transform_events(self, k, t):
-        """Apply inverse warping functions to events.
+    def transform(self, X):
+        """Apply inverse warping functions to spike data
         """
-        assert len(k) == len(t)
 
-        return interp_knots(self.x_knots, self.y_knots, k, t)
+        # add append new axis to 2d array if necessary
+        if X.ndim == 2:
+            X = X[:, :, None]
+        elif X.ndim != 3:
+            raise ValueError('Input should be 2d or 3d array.')
+
+        # check that first axis of X matches n_trials
+        if X.shape[0] != len(self.warping_funcs):
+            raise ValueError('Input ')
+
+        # length of time axis undergoing warping
+        T = X.shape[1]
+
+        # sparse array transform
+        if isinstance(X, sparse.SparseArray):
+
+            # indices of sparse entries
+            trials, times, neurons = sparse.where(X)
+
+            # find warped time
+            w = sparsewarp(self.x_knots, self.y_knots, trials, times / T)
+
+            # return data as a new COO array
+            wtimes = (w * T).astype(int)
+
+            # throw away out of bounds spikes
+            # TODO: add option to expand the dimensions instead
+            i = (wtimes < T) & (wtimes >= 0)
+
+            return sparse.COO([trials[i], wtimes[i], neurons[i]],
+                              data=X.data[i], shape=X.shape)
+
+        # dense array transform
+        elif isinstance(X, np.ndarray):
+            result = np.empty_like(X)
+            # densewarp(self.y_knots, self.x_knots, X, result)
+            return result
+
+
+# LOSS FUNCTIONS #
+
+# elementwise quadratic loss
+@jit(nopython=True)
+def _elemwise_quad(x, y):
+    return (x - y)**2

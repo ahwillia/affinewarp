@@ -2,6 +2,11 @@ import numpy as np
 from numba import jit
 
 
+def participation(M):
+    lam = np.linalg.svd(M, compute_uv=False)**2
+    return np.sum(lam)**2 / np.sum(lam**2)
+
+
 def modf(U):
     """Return the fractional and integral parts of an array, element-wise.
 
