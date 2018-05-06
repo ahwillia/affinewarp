@@ -45,7 +45,7 @@ class AffineWarping(object):
         return x, y
 
     def fit(self, data, **kwargs):
-        """Preprocesses data by binning spike times
+        """Initializes warping functions and model template and begin fitting.
         """
 
         # check data dimensions as input
@@ -89,7 +89,7 @@ class AffineWarping(object):
 
     def continue_fit(self, data, iterations=10, warp_iterations=20,
                      verbose=True):
-        """Fits warping functions and model template
+        """Continues optimization of warps and template (no initialization).
         """
 
         # check that model is initialized.
@@ -99,7 +99,7 @@ class AffineWarping(object):
                              "'AffineWarping.continue_fit(...)'.")
 
         if data.shape[-1] != self.template.shape[1]:
-            raise ValueError('Dimension mismatch. ')
+            raise ValueError('Dimension mismatch.')
 
         # progress bar
         pbar = trange(iterations) if verbose else range(iterations)
@@ -216,6 +216,12 @@ class AffineWarping(object):
         """Apply inverse warping functions to spike data
         """
 
+        # check initialization
+        if self.warping_funcs is None:
+            raise ValueError("Model not initialized. Need to call "
+                             "'AffineWarping.fit(...)' before calling "
+                             "'AffineWarping.transform(...)'.")
+
         # add append new axis to 2d array if necessary
         if X.ndim == 2:
             X = X[:, :, None]
@@ -224,7 +230,8 @@ class AffineWarping(object):
 
         # check that first axis of X matches n_trials
         if X.shape[0] != len(self.warping_funcs):
-            raise ValueError('Input ')
+            raise ValueError('Number of trials in the input does not match '
+                             'the number of trials in the fitted model.')
 
         # length of time axis undergoing warping
         T = X.shape[1]
@@ -249,10 +256,9 @@ class AffineWarping(object):
                               data=X.data[i], shape=X.shape)
 
         # dense array transform
-        elif isinstance(X, np.ndarray):
-            result = np.empty_like(X)
-            # densewarp(self.y_knots, self.x_knots, X, result)
-            return result
+        else:
+            X = np.asarray(X)
+            return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
 
 
 # LOSS FUNCTIONS #
@@ -260,4 +266,5 @@ class AffineWarping(object):
 # elementwise quadratic loss
 @jit(nopython=True)
 def _elemwise_quad(x, y):
-    return (x - y)**2
+    r = x - y
+    return np.dot(r.ravel(), r.ravel())

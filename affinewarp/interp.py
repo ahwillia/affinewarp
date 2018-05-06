@@ -54,7 +54,7 @@ def sparsewarp(_X, _Y, trials, xtst):
     return ytst
 
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def densewarp(X, Y, data, out):
 
     K = data.shape[0]
@@ -76,20 +76,19 @@ def densewarp(X, Y, data, out):
 
             # update interpolation point
             while (t/(T-1) > X[k, n]) and (n < n_knots-1):
-                n += 1
                 y0 = Y[k, n]
                 x0 = X[k, n]
                 slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
+                n += 1
 
             z = y0 + slope*((t/(T-1)) - x0)
-            # import pdb
-            # pdb.set_trace()
 
             if z < 0:
-                out[k, t] = data[k, 0]
+                out[k, t] = np.nan  # data[k, 0]
             elif z > 1:
-                out[k, t] = data[k, -1]
+                out[k, t] = np.nan  # data[k, -1]
             else:
+                foo = True
                 _i = z * (T-1)
                 rem = _i % 1
                 i = int(_i)
@@ -142,35 +141,20 @@ def warp_with_loss(xtst, X, Y, warps, template, new_loss, last_loss, data, neuro
             # clip warp interpolation between zero and one
             if z < 0:
                 warps[i, m] = 0.0
-
-                # evaluate loss at first index
-                for neu in neurons:
-                    # new_loss[i] += ((template[0, neu] - data[i, m, neu]) ** 2) / denom
-                    new_loss[i] += lossfunc(template[0, neu], data[i, m, neu]) / denom
+                pred = template[0]
 
             elif z > 1:
                 warps[i, m] = 1.0
-
-                # evaluate loss at last index
-                for neu in neurons:
-                    # new_loss[i] += ((template[-1, neu] - data[i, m, neu]) ** 2) / denom
-                    new_loss[i] += lossfunc(template[-1, neu], data[i, m, neu]) / denom
+                pred = template[-1]
 
             else:
                 warps[i, m] = z
-                _i = z * (T-1)
-                rem = _i % 1
-                idx = int(_i)
+                _j = z * (T-1)
+                rem = _j % 1
+                j = int(_j)
+                pred = (1-rem)*template[j] + rem*template[j+1]
 
-                # evaluate loss at interpolant
-                for neu in neurons:
-                    # new_loss[i] += ((
-                    #     (1 - rem) * template[idx, neu] +
-                    #     rem * template[idx + 1, neu] -
-                    #     data[i, m, neu]
-                    # ) ** 2) / denom
-                    new_loss[i] += lossfunc((1 - rem) * template[idx, neu] + rem * template[idx + 1, neu],
-                                            data[i, m, neu]) / denom
+            new_loss[i] += lossfunc(pred, data[i, m]) / denom
 
             # move to next timepoint
             m += 1

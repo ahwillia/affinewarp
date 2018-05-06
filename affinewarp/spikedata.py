@@ -3,7 +3,7 @@ import sparse
 from numba import jit
 
 
-def bin_spikes(data, nbins, tmin=None, tmax=None):
+def bin_spikes(data, nbins):
 
     if isinstance(data, sparse.COO):
         trials, times, neurons = data.coords
@@ -27,6 +27,25 @@ def bin_spikes(data, nbins, tmin=None, tmax=None):
 
     # return (trials x timebins x neurons) array of binned spike counts
     return binned
+
+
+def calc_snr(data, nbins=None):
+    """Compute signal-to-noise estimate for each neuron.
+
+    Returns
+    -------
+    1d array, SNR for each neuron
+    """
+
+    # bin spike before computing SNR
+    if nbins is None:
+        binned = data
+    else:
+        binned = bin_spikes(data, nbins)
+
+    m = binned.mean(axis=0)
+    s = binned.std(axis=0)
+    return m.ptp(axis=0) / s.max(axis=0)
 
 
 @jit(nopython=True)

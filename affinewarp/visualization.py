@@ -16,7 +16,7 @@ def rasters(data, subplots=(5, 6), figsize=(9*1.5, 5*1.5),
 
     fig, axes = plt.subplots(*subplots, figsize=figsize)
 
-    for ax, n in zip(axes.ravel(), np.unique(neurons)):
+    for ax, n in zip(axes.ravel(), range(data.shape[2])):
         x, y = times[neurons == n], trials[neurons == n]
         if len(x) > max_spikes:
             idx = np.random.choice(np.arange(len(x)), size=max_spikes,
@@ -37,6 +37,50 @@ def rasters(data, subplots=(5, 6), figsize=(9*1.5, 5*1.5),
     fig.patch.set_facecolor('k')
 
     return fig, axes
+
+
+def binned_heatmap(binned, subplots=(5, 6), figsize=(9*1.5, 5*1.5), **kwargs):
+
+    kwargs.setdefault('aspect', 'auto')
+
+    fig, axes = plt.subplots(*subplots, figsize=figsize)
+
+    for ax, n in zip(axes.ravel(), range(binned.shape[-1])):
+        ax.imshow(binned[:, :, n], **kwargs)
+        ax.set_facecolor('k')
+        ax.set_title('neuron {}'.format(n), color='w')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    for ax in axes.ravel()[n:]:
+        ax.axis('off')
+
+    fig.tight_layout()
+    fig.patch.set_facecolor('k')
+
+    return fig, axes
+
+
+def psth(celldata, ax=None, line_kw=dict(), errbar_kw=dict()):
+
+    line_kw.setdefault('color', 'k')
+
+    errbar_kw.setdefault('color', 'r')
+    errbar_kw.setdefault('alpha', 0.1)
+
+    if ax is None:
+        ax = plt.gca()
+
+    m = celldata.mean(axis=0)
+    se = celldata.std(axis=0)
+    x = np.arange(len(m))
+
+    errbar = ax.fill_between(x, m+se, m-se, **errbar_kw)
+    line = ax.plot(x, m, **line_kw)
+
+    return line, errbar
 
 
 def dimensionality_change(data, aligned_data, sigma, **scatter_kw):
