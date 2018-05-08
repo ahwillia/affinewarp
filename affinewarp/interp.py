@@ -54,7 +54,7 @@ def sparsewarp(_X, _Y, trials, xtst):
     return ytst
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def densewarp(X, Y, data, out):
 
     K = data.shape[0]
@@ -74,19 +74,23 @@ def densewarp(X, Y, data, out):
         # iterate over all time bins, stop early if loss is too high.
         for t in range(T):
 
+            # fraction of trial complete
+            x = t / (T - 1)
+
             # update interpolation point
-            while (t/(T-1) > X[k, n]) and (n < n_knots-1):
+            while (n < n_knots-1) and (x > X[k, n]):
                 y0 = Y[k, n]
                 x0 = X[k, n]
                 slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
                 n += 1
 
-            z = y0 + slope*((t/(T-1)) - x0)
+            # compute index in warped time
+            z = y0 + slope*(x - x0)
 
             if z < 0:
-                out[k, t] = np.nan  # data[k, 0]
+                out[k, t] = data[k, 0]
             elif z > 1:
-                out[k, t] = np.nan  # data[k, -1]
+                out[k, t] = data[k, -1]
             else:
                 foo = True
                 _i = z * (T-1)
@@ -98,16 +102,16 @@ def densewarp(X, Y, data, out):
 
 
 @jit(nopython=True)
-def warp_with_loss(xtst, X, Y, warps, template, new_loss, last_loss, data, neurons, lossfunc):
+def warp_with_quadloss(X, Y, warps, template, new_loss, last_loss, data):
 
-    # number of interpolated points
-    T = len(xtst)
+    # num timepoints
+    T = template.shape[0]
 
     # number discontinuities in piecewise linear function
-    N = len(X[0])
+    n_knots = X.shape[1]
 
     # normalizing divisor for average loss across each trial
-    denom = data.shape[1] * data.shape[2]
+    denom = T * data.shape[2]
 
     # iterate over trials
     for i in range(len(X)):
@@ -117,44 +121,64 @@ def warp_with_loss(xtst, X, Y, warps, template, new_loss, last_loss, data, neuro
         x0 = X[i, 0]
         slope = (Y[i, 1] - Y[i, 0]) / (X[i, 1] - X[i, 0])
 
-        # 'm' counts the timebins within trial 'i'.
         # 'n' counts knots in piecewise affine warping function.
-        m = 0
         n = 1
 
         # compute loss for trial i
         new_loss[i] = 0
 
-        # iterate over all time bins, stop early if loss is too high.
-        while (m < T) and (new_loss[i] < last_loss[i]):
+        # iterate over time bins
+        for t in range(T):
+
+            # fraction of trial complete
+            x = t / (T - 1)
 
             # update interpolation point
-            while (n < N-1) and (m/(T-1) > X[i, n]):
+            while (n < n_knots-1) and (x > X[i, n]):
                 y0 = Y[i, n]
                 x0 = X[i, n]
                 slope = (Y[i, n+1] - y0) / (X[i, n+1] - x0)
                 n += 1
 
-            # do interpolation and move on to next element in xtst
-            z = y0 + slope*(xtst[m] - x0)
+            # compute index in warped time
+            z = y0 + slope*(x - x0)
 
             # clip warp interpolation between zero and one
             if z < 0:
-                warps[i, m] = 0.0
-                pred = template[0]
+                warps[i, t] = 0.0
+                new_loss[i] += _quad_loss(template[0], data[i, t]) / denom
 
             elif z > 1:
-                warps[i, m] = 1.0
-                pred = template[-1]
+                warps[i, t] = 1.0
+                new_loss[i] += _quad_loss(template[-1], data[i, t]) / denom
 
+            # do linear interpolation
             else:
-                warps[i, m] = z
+                warps[i, t] = z
                 _j = z * (T-1)
                 rem = _j % 1
                 j = int(_j)
-                pred = (1-rem)*template[j] + rem*template[j+1]
+                new_loss[i] += _interp_quad_loss(
+                    rem, template[j], template[j+1], data[i, t]
+                ) / denom
 
-            new_loss[i] += lossfunc(pred, data[i, m]) / denom
+            # early stopping
+            if new_loss[i] >= last_loss[i]:
+                break
 
-            # move to next timepoint
-            m += 1
+
+@jit(nopython=True)
+def _quad_loss(pred, targ):
+    result = 0.0
+    for i in range(pred.size):
+        result += (pred[i] - targ[i])**2
+    return result
+
+
+@jit(nopython=True)
+def _interp_quad_loss(a, y1, y2, targ):
+    result = 0.0
+    b = 1 - a
+    for i in range(y1.size):
+        result += (b*y1[i] + a*y2[i] - targ[i])**2
+    return result

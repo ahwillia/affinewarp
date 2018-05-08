@@ -3,7 +3,7 @@ from scipy.interpolate import interp1d
 import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _fast_template_grams, quad_loss
-from .interp import warp_with_loss, densewarp, sparsewarp
+from .interp import warp_with_quadloss, densewarp, sparsewarp
 from numba import jit
 import sparse
 
@@ -144,9 +144,9 @@ class AffineWarping(object):
             X, Y = self._sample_knots(data.shape[0])
 
             # Note: this is the bulk of computation time.
-            warp_with_loss(self.tref, X, Y, self._new_warps,
-                           self.template, self._new_losses, self._losses,
-                           data, neurons, _elemwise_quad)
+            warp_with_quadloss(X, Y, self._new_warps,
+                               self.template, self._new_losses,
+                               self._losses, data)
 
             # update warping parameters for trials with improved loss
             idx = self._new_losses < self._losses
@@ -259,12 +259,3 @@ class AffineWarping(object):
         else:
             X = np.asarray(X)
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
-
-
-# LOSS FUNCTIONS #
-
-# elementwise quadratic loss
-@jit(nopython=True)
-def _elemwise_quad(x, y):
-    r = x - y
-    return np.dot(r.ravel(), r.ravel())
