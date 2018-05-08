@@ -3,7 +3,7 @@ from scipy.interpolate import interp1d
 import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _fast_template_grams, quad_loss
-from .interp import warp_with_quadloss, densewarp, sparsewarp
+from .interp import warp_with_quadloss, densewarp, sparsewarp, predictwarp
 from numba import jit
 import sparse
 
@@ -25,7 +25,8 @@ class AffineWarping(object):
 
         # initialize model now if data is provided
         self.template = None
-        self.warping_funcs = None
+        self.x_knots = None
+        self.y_knots = None
 
     def _sample_knots(self, n):
         """Randomly sample warping functions.
@@ -63,7 +64,8 @@ class AffineWarping(object):
         N = data.shape[2]
 
         # initialize template
-        self.template = data[np.random.randint(K)].astype(float)
+        # self.template = data[np.random.randint(K)].astype(float)
+        self.template = data[:100].mean(axis=0).astype(float)
 
         # time base
         self.tref = np.linspace(0, 1, T)
@@ -73,15 +75,13 @@ class AffineWarping(object):
             np.linspace(0, 1, self.n_knots+2),
             (K, 1)
         )
-        self.y_knots = self.x_knots.copy()  # TODO - remove copy?
-        self.warping_funcs = np.tile(self.tref, (K, 1))
+        self.y_knots = self.x_knots.copy()
 
         # update loss
         self._losses = quad_loss(self.predict(), data)
         self.loss_hist = [np.mean(self._losses)]
 
         # arrays used in fit_warps function
-        self._new_warps = np.empty_like(self.warping_funcs)
         self._new_losses = np.empty_like(self._losses)
 
         # call fitting function
@@ -144,8 +144,7 @@ class AffineWarping(object):
             X, Y = self._sample_knots(data.shape[0])
 
             # Note: this is the bulk of computation time.
-            warp_with_quadloss(X, Y, self._new_warps,
-                               self.template, self._new_losses,
+            warp_with_quadloss(X, Y, self.template, self._new_losses,
                                self._losses, data)
 
             # update warping parameters for trials with improved loss
@@ -153,7 +152,6 @@ class AffineWarping(object):
             self._losses[idx] = self._new_losses[idx]
             self.x_knots[idx] = X[idx]
             self.y_knots[idx] = Y[idx]
-            self.warping_funcs[idx] = self._new_warps[idx]
 
     def fit_template(self, data, trials=None):
         """Fit template by least squares.
@@ -183,12 +181,9 @@ class AffineWarping(object):
             WtW = np.zeros((2, T))
             _WtW = WtW
 
+        # compute gramians
         WtX = np.zeros((T, data.shape[-1]))
-
-        lam, i = modf(self.warping_funcs[trials] * (T-1))
-        lam, i = lam.ravel(), i.ravel()
-
-        _fast_template_grams(_WtW, WtX, data.reshape(-1, N), lam, i)
+        _fast_template_grams(_WtW, WtX, data, self.x_knots, self.y_knots)
 
         # solve WtW * template = WtX
         self.template = sci.linalg.solveh_banded(
@@ -203,21 +198,23 @@ class AffineWarping(object):
 
     def predict(self):
         # check initialization
-        if self.warping_funcs is None:
+        if self.x_knots is None:
             raise ValueError("Model not initialized. Need to call "
                              "'AffineWarping.fit(...)' before calling "
                              "'AffineWarping.predict(...)'.")
 
         # apply warping functions to template
-        f = interp1d(self.tref, self.template, axis=0, assume_sorted=True)
-        return np.asarray([f(t) for t in self.warping_funcs])
+        K = self.x_knots.shape[0]
+        T, N = self.template.shape
+        result = np.empty((K, T, N))
+        return predictwarp(self.x_knots, self.y_knots, self.template, result)
 
     def transform(self, X):
         """Apply inverse warping functions to spike data
         """
 
         # check initialization
-        if self.warping_funcs is None:
+        if self.x_knots is None:
             raise ValueError("Model not initialized. Need to call "
                              "'AffineWarping.fit(...)' before calling "
                              "'AffineWarping.transform(...)'.")
@@ -229,7 +226,7 @@ class AffineWarping(object):
             raise ValueError('Input should be 2d or 3d array.')
 
         # check that first axis of X matches n_trials
-        if X.shape[0] != len(self.warping_funcs):
+        if X.shape[0] != len(self.x_knots):
             raise ValueError('Number of trials in the input does not match '
                              'the number of trials in the fitted model.')
 
