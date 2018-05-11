@@ -39,15 +39,6 @@ def _reduce_sum_assign(U, i, elems):
 
 @jit(nopython=True)
 def _fast_template_grams(WtW, WtX, data, X, Y):
-    # n = len(WtX)
-    # for j in range(len(i)):
-    #     mlam = 1-lam[j]
-    #     WtW[1, i[j]] += mlam**2
-    #     WtX[i[j]] += mlam * unf[j]
-    #     if i[j] < (n-1):
-    #         WtW[1, i[j]+1] += lam[j]**2
-    #         WtW[0, i[j]+1] += mlam * lam[j]
-    #         WtX[i[j]+1] += lam[j] * unf[j]
 
     K, T, N = data.shape
     n_knots = X.shape[1]
@@ -96,6 +87,52 @@ def _fast_template_grams(WtW, WtX, data, X, Y):
                 WtW[1, i+1] += lam**2
                 WtW[0, i+1] += (1-lam) * lam
                 WtX[i+1] += lam * data[k, t]
+
+
+@jit(nopython=True)
+def _force_monotonic_knots(X, Y):
+    K, P = X.shape
+    for k in range(K):
+
+        for p in range(P-1):
+            x0 = X[k, p]
+            y0 = Y[k, p]
+            x1 = X[k, p+1]
+            y1 = Y[k, p+1]
+            dx = X[k, p+1] - X[k, p]
+            dy = Y[k, p+1] - Y[k, p]
+
+            if (dx < 0) and (dy < 0):
+                # swap both x and y coordinates
+                tmp = X[k, p]
+                X[k, p] = X[k, p+1]
+                X[k, p+1] = tmp
+                # swap y
+                tmp = Y[k, p]
+                Y[k, p] = Y[k, p+1]
+                Y[k, p+1] = tmp
+
+            elif dx < 0:
+                # swap x coordinate
+                tmp = X[k, p]
+                X[k, p] = X[k, p+1]
+                X[k, p+1] = tmp
+                # set y coordinates to mean
+                Y[k, p] = Y[k, p] + (dy/2) - 1e-3
+                Y[k, p+1] = Y[k, p+1] - (dy/2) + 1e-3
+
+            elif dy < 0:
+                # set y coordinates to mean
+                Y[k, p] = Y[k, p] + (dy/2) - 1e-3
+                Y[k, p+1] = Y[k, p+1] - (dy/2) + 1e-3
+
+        for p in range(P):
+            if X[k, p] <= 0:
+                X[k, p] = 0.0 + 1e-3*p
+            elif X[k, p] >= 1:
+                X[k, p] = 1.0 - 1e-3*(P-p-1)
+
+    return X, Y
 
 
 def quad_loss(pred, targ):

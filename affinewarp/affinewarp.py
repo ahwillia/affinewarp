@@ -2,7 +2,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 import scipy as sci
 from tqdm import trange, tqdm
-from .utils import modf, _fast_template_grams, quad_loss
+from .utils import modf, _fast_template_grams, quad_loss, _force_monotonic_knots
 from .interp import warp_with_quadloss, densewarp, sparsewarp, predictwarp
 from numba import jit
 import sparse
@@ -44,6 +44,14 @@ class AffineWarping(object):
         y = (y1-y0)*y + y0
 
         return x, y
+
+    def _mutate_knots(self, temperature=1e-2):
+        x, y = self.x_knots.copy(), self.y_knots.copy()
+        K, P = x.shape
+        y += np.random.randn(K, P) * temperature
+        if self.n_knots > 0:
+            x[:, 1:-1] += np.random.randn(K, self.n_knots) * temperature
+        return _force_monotonic_knots(x, y)
 
     def fit(self, data, **kwargs):
         """Initializes warping functions and model template and begin fitting.
@@ -88,7 +96,7 @@ class AffineWarping(object):
         self.continue_fit(data, **kwargs)
 
     def continue_fit(self, data, iterations=10, warp_iterations=20,
-                     verbose=True):
+                     fit_template=True, verbose=True):
         """Continues optimization of warps and template (no initialization).
         """
 
@@ -108,9 +116,17 @@ class AffineWarping(object):
         for it in pbar:
             last_loss = self.loss_hist[-1]
 
-            # Note: roughly equal computation time for 20 warp iterations.
             self.fit_warps(data, warp_iterations)
-            self.fit_template(data)
+
+            if fit_template:
+                self.fit_template(data)
+
+                # update reconstruction and evaluate loss
+                warp_with_quadloss(self.x_knots, self.y_knots, self.template,
+                                   self._losses, self._losses,
+                                   data, early_stop=False)
+
+                self.loss_hist.append(self._losses.mean())
 
             # display progress
             if verbose:
@@ -141,7 +157,8 @@ class AffineWarping(object):
 
         for i in range(iterations):
             # randomly sample warping functions
-            X, Y = self._sample_knots(data.shape[0])
+            # X, Y = self._sample_knots(data.shape[0])
+            X, Y = self._mutate_knots()
 
             # Note: this is the bulk of computation time.
             warp_with_quadloss(X, Y, self.template, self._new_losses,
@@ -189,10 +206,6 @@ class AffineWarping(object):
         self.template = sci.linalg.solveh_banded(
             WtW, WtX, overwrite_ab=True, overwrite_b=True
         )
-
-        # update reconstruction and evaluate loss
-        self._losses = quad_loss(self.predict(), data)
-        self.loss_hist.append(np.mean(self._losses))
 
         return self.template
 

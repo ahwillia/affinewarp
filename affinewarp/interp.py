@@ -92,7 +92,6 @@ def densewarp(X, Y, data, out):
             elif z >= 1:
                 out[k, t] = data[k, -1]
             else:
-                foo = True
                 _i = z * (T-1)
                 rem = _i % 1
                 i = int(_i)
@@ -138,7 +137,6 @@ def predictwarp(X, Y, template, out):
             elif z >= 1:
                 out[k, t] = template[-1]
             else:
-                foo = True
                 _i = z * (T-1)
                 rem = _i % 1
                 i = int(_i)
@@ -148,7 +146,7 @@ def predictwarp(X, Y, template, out):
 
 
 @jit(nopython=True)
-def warp_with_quadloss(X, Y, template, new_loss, last_loss, data):
+def warp_with_quadloss(X, Y, template, new_loss, last_loss, data, early_stop=True):
 
     # num timepoints
     K, T, N = data.shape
@@ -190,10 +188,10 @@ def warp_with_quadloss(X, Y, template, new_loss, last_loss, data):
             z = y0 + slope*(x - x0)
 
             # clip warp interpolation between zero and one
-            if z < 0:
+            if z <= 0:
                 new_loss[k] += _quad_loss(template[0], data[k, t]) / denom
 
-            elif z > 1:
+            elif z >= 1:
                 new_loss[k] += _quad_loss(template[-1], data[k, t]) / denom
 
             # do linear interpolation
@@ -205,7 +203,7 @@ def warp_with_quadloss(X, Y, template, new_loss, last_loss, data):
                 ) / denom
 
             # early stopping
-            if new_loss[k] >= last_loss[k]:
+            if early_stop and new_loss[k] >= last_loss[k]:
                 break
 
 
