@@ -4,6 +4,7 @@ import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _fast_template_grams, quad_loss, _force_monotonic_knots
 from .interp import warp_with_quadloss, densewarp, sparsewarp, sparsealign, predictwarp, warp_penalties
+from .spikedata import get_spike_coords, get_spike_shape
 from numba import jit
 import sparse
 
@@ -12,7 +13,7 @@ class AffineWarping(object):
     """Piecewise Affine Time Warping applied to an analog (dense) time series.
     """
     def __init__(self, n_knots=0, warpreg=0, l2_smoothness=0,
-                 min_temp=-2, max_temp=0):
+                 min_temp=-2, max_temp=-1):
 
         # check inputs
         if n_knots < 0:
@@ -237,25 +238,29 @@ class AffineWarping(object):
                              "'AffineWarping.fit(...)' before calling "
                              "'AffineWarping.transform(...)'.")
 
+        # get data dimensions
+        shape = get_spike_shape(X)
+        ndim = len(shape)
+
         # add append new axis to 2d array if necessary
-        if X.ndim == 2:
+        if ndim == 2:
             X = X[:, :, None]
-        elif X.ndim != 3:
+        elif ndim != 3:
             raise ValueError('Input should be 2d or 3d array.')
 
         # check that first axis of X matches n_trials
-        if X.shape[0] != len(self.x_knots):
+        if shape[0] != len(self.x_knots):
             raise ValueError('Number of trials in the input does not match '
                              'the number of trials in the fitted model.')
 
         # length of time axis undergoing warping
-        T = X.shape[1]
+        T = shape[1]
 
         # sparse array transform
-        if isinstance(X, sparse.SparseArray):
+        try:
 
             # indices of sparse entries
-            trials, times, neurons = sparse.where(X)
+            trials, times, neurons = get_spike_coords(X)
 
             # find warped time
             w = sparsealign(self.x_knots, self.y_knots, trials, times / T)
@@ -265,13 +270,13 @@ class AffineWarping(object):
                 wtimes = (w * T).astype(int)
                 i = (wtimes < T) & (wtimes >= 0)
                 return sparse.COO([trials[i], wtimes[i], neurons[i]],
-                                  data=X.data[i], shape=X.shape)
+                                  data=np.ones(i.sum()), shape=shape)
             else:
                 # return coordinates
                 return (trials, w * T, neurons)
 
         # dense array transform
-        else:
+        except ValueError:
             X = np.asarray(X)
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
 

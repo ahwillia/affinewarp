@@ -3,28 +3,6 @@ from numba import jit
 import sparse
 
 
-def get_spike_coords(data):
-
-    if isinstance(data, sparse.COO):
-        if data.ndim != 3:
-            raise ValueError('Spiking data supplied as a sparse array '
-                             'must have ndim == 3.')
-        return data.coords
-
-    elif isinstance(data, tuple):
-        if len(data) != 3 or len(np.unique([c.size for c in data])) != 1:
-            raise ValueError('Spiking data supplied as a tuple must be 3 '
-                             'lists of equal length specifying trial '
-                             'number, spike time, and neuron id (in that '
-                             'order).')
-        else:
-            return data
-
-    else:
-        raise ValueError('Spiking data must be supplied as tuple or sparse '
-                         'array.')
-
-
 def participation(M):
     lam = np.linalg.svd(M, compute_uv=False)**2
     return np.sum(lam)**2 / np.sum(lam**2)
@@ -149,6 +127,7 @@ def _force_monotonic_knots(X, Y):
                 Y[k, p] = Y[k, p] + (dy/2) - 1e-3
                 Y[k, p+1] = Y[k, p+1] - (dy/2) + 1e-3
 
+        # TODO - redistribute redundant edge knots
         for p in range(P):
             if X[k, p] <= 0:
                 X[k, p] = 0.0 + 1e-3*p

@@ -3,17 +3,67 @@ import sparse
 from numba import jit
 
 
-def bin_spikes(data, nbins):
+def _check_spike_tuple(data):
+    """Check that spike indices in tuple formate are correct
+    """
+
+    if not (
+        len(data) == 3 and
+        len(np.unique([c.size for c in data])) == 1 and
+        all(np.issubdtype(c.dtype, np.integer) for c in data)
+    ):
+        raise ValueError(
+            'Spiking data supplied as a tuple must be 3 arrays holding '
+            'integers. Arrays must be equal length specifying trial number, '
+            'spike time, neuron id (in that order).')
+
+
+def get_spike_coords(data):
+    """Returns indices of spike times (trial number, time bin, neuron id)
+    """
 
     if isinstance(data, sparse.COO):
-        trials, times, neurons = data.coords
-    else:
-        trials, times, neurons = np.nonzero(data)
+        if data.ndim != 3:
+            raise ValueError('Spiking data supplied as a sparse array '
+                             'must have ndim == 3.')
+        return data.coords
 
-    # compute bin size
-    n_trials = data.shape[0]
-    n_timepoints = data.shape[1]
-    n_neurons = data.shape[2]
+    elif isinstance(data, tuple):
+        _check_spike_tuple(data)
+        return data
+
+    else:
+        raise ValueError('Spiking data must be supplied as tuple or sparse '
+                         'array.')
+
+
+def get_spike_shape(data):
+    """Returns shape of spike data sparse array
+    """
+
+    if hasattr(data, 'shape'):
+        return data.shape
+
+    elif isinstance(data, tuple):
+        _check_spike_tuple(data)
+        return tuple([d.max()+1 for d in data])
+
+
+def bin_spikes(data, nbins, shape=None):
+    """Bin spike data into dense 3d tensor (trials x nbins x neurons)
+    """
+
+    # get spike indices
+    trials, times, neurons = get_spike_coords(data)
+
+    try:
+        shape = data.shape
+    except AttributeError:
+        shape = [trials.max()+1, times.max()+1, neurons.max()+1]
+
+    n_trials = shape[0]
+    n_timepoints = shape[1]
+    n_neurons = shape[2]
 
     # compute bin id for each spike time
     #   - note: dividing by n_timepoints first is actually critical if data

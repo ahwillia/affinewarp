@@ -38,3 +38,6 @@ nosetests.xml
 
 # Jupyter
 .ipynb_checkpoints
+
+# data files
+*.h5
