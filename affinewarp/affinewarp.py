@@ -3,7 +3,7 @@ from scipy.interpolate import interp1d
 import scipy as sci
 from tqdm import trange, tqdm
 from .utils import modf, _fast_template_grams, quad_loss, _force_monotonic_knots
-from .interp import warp_with_quadloss, densewarp, sparsewarp, predictwarp
+from .interp import warp_with_quadloss, densewarp, sparsewarp, sparsealign, predictwarp, warp_penalties
 from numba import jit
 import sparse
 
@@ -11,7 +11,8 @@ import sparse
 class AffineWarping(object):
     """Piecewise Affine Time Warping applied to an analog (dense) time series.
     """
-    def __init__(self, q1=.3, q2=.15, boundary=0, n_knots=0, l2_smoothness=0):
+    def __init__(self, n_knots=0, warpreg=0, l2_smoothness=0,
+                 min_temp=-2, max_temp=0):
 
         # check inputs
         if n_knots < 0:
@@ -19,33 +20,17 @@ class AffineWarping(object):
 
         # model options
         self.n_knots = n_knots
-        self.q1 = q1
-        self.q2 = q2
+        self.warpreg = warpreg
         self.l2_smoothness = l2_smoothness
+        self.min_temp = min_temp
+        self.max_temp = max_temp
 
         # initialize model now if data is provided
         self.template = None
         self.x_knots = None
         self.y_knots = None
 
-    def _sample_knots(self, n):
-        """Randomly sample warping functions.
-        """
-        x = np.column_stack((np.zeros(n),
-                             np.sort(np.random.rand(n, self.n_knots)),
-                             np.ones(n)))
-        y = np.column_stack((np.zeros(n),
-                             np.sort(np.random.rand(n, self.n_knots)),
-                             np.ones(n)))
-        y = self.q1*y + (1-self.q1)*x
-
-        y0 = np.random.uniform(-self.q2, self.q2, size=(n, 1))
-        y1 = np.random.uniform(1-self.q2, 1+self.q2, size=(n, 1))
-        y = (y1-y0)*y + y0
-
-        return x, y
-
-    def _mutate_knots(self, temperature=1e-2):
+    def _mutate_knots(self, temperature):
         x, y = self.x_knots.copy(), self.y_knots.copy()
         K, P = x.shape
         y += np.random.randn(K, P) * temperature
@@ -72,8 +57,7 @@ class AffineWarping(object):
         N = data.shape[2]
 
         # initialize template
-        # self.template = data[np.random.randint(K)].astype(float)
-        self.template = data[:100].mean(axis=0).astype(float)
+        self.template = data.mean(axis=0).astype(float)
 
         # time base
         self.tref = np.linspace(0, 1, T)
@@ -85,12 +69,14 @@ class AffineWarping(object):
         )
         self.y_knots = self.x_knots.copy()
 
-        # update loss
+        # compute initial loss
         self._losses = quad_loss(self.predict(), data)
+        self._penalties = np.zeros(K)
         self.loss_hist = [np.mean(self._losses)]
 
         # arrays used in fit_warps function
         self._new_losses = np.empty_like(self._losses)
+        self._new_penalties = np.empty_like(self._losses)
 
         # call fitting function
         self.continue_fit(data, **kwargs)
@@ -114,51 +100,56 @@ class AffineWarping(object):
 
         # fit model
         for it in pbar:
-            last_loss = self.loss_hist[-1]
 
+            # update warping functions
             self.fit_warps(data, warp_iterations)
 
+            # user has option to only fit warps
             if fit_template:
+
+                # update template
                 self.fit_template(data)
 
                 # update reconstruction and evaluate loss
+                self._losses.fill(0.0)
                 warp_with_quadloss(self.x_knots, self.y_knots, self.template,
                                    self._losses, self._losses,
                                    data, early_stop=False)
 
-                self.loss_hist.append(self._losses.mean())
+                # add warping penalty to losses
+                if self.warpreg > 0:
+                    self._losses += self._penalties
+
+            # store objective function over time
+            self.loss_hist.append(self._losses.mean())
 
             # display progress
             if verbose:
-                imp = 100 * (last_loss - self.loss_hist[-1]) / last_loss
+                imp = 100 * (self.loss_hist[-2] - self.loss_hist[-1]) / self.loss_hist[-2]
                 pbar.set_description('Loss improvement: {0:.2f}%'.format(imp))
 
         return self
-
-    def dump_params(self):
-        """Returns a list of model parameters for storage
-        """
-        return {
-            'template': self.template,
-            'x_knots': self.x_knots,
-            'y_knots': self.y_knots,
-            'loss_hist': self.loss_hist,
-            'l2_smoothness': self.l2_smoothness,
-            'q1': self.q1,
-            'q2': self.q2
-        }
 
     def fit_warps(self, data, iterations=20, neurons=None):
         """Fit warping functions by random search.
         """
 
-        if neurons is None:
-            neurons = np.arange(data.shape[2])
+        # decay temperature within each epoch
+        temperatures = np.logspace(self.min_temp, self.max_temp, iterations)
 
-        for i in range(iterations):
+        # fit warps
+        for temp in reversed(temperatures):
+
             # randomly sample warping functions
-            # X, Y = self._sample_knots(data.shape[0])
-            X, Y = self._mutate_knots()
+            X, Y = self._mutate_knots(temp)
+
+            # recompute warping penalty
+            if self.warpreg > 0:
+                warp_penalties(X, Y, self._new_penalties)
+                self._new_penalties *= self.warpreg
+                np.copyto(self._new_losses, self._new_penalties)
+            else:
+                self._new_losses.fill(0.0)
 
             # Note: this is the bulk of computation time.
             warp_with_quadloss(X, Y, self.template, self._new_losses,
@@ -167,17 +158,16 @@ class AffineWarping(object):
             # update warping parameters for trials with improved loss
             idx = self._new_losses < self._losses
             self._losses[idx] = self._new_losses[idx]
+            self._penalties[idx] = self._new_penalties[idx]
             self.x_knots[idx] = X[idx]
             self.y_knots[idx] = Y[idx]
 
-    def fit_template(self, data, trials=None):
+    def fit_template(self, data):
         """Fit template by least squares.
         """
 
-        if trials is None:
-            trials = slice(None)
-
         # compute normal equations
+        K = data.shape[0]
         T = data.shape[1]
         N = data.shape[2]
 
@@ -203,9 +193,7 @@ class AffineWarping(object):
         _fast_template_grams(_WtW, WtX, data, self.x_knots, self.y_knots)
 
         # solve WtW * template = WtX
-        self.template = sci.linalg.solveh_banded(
-            WtW, WtX, overwrite_ab=True, overwrite_b=True
-        )
+        self.template = sci.linalg.solveh_banded(WtW, WtX)
 
         return self.template
 
@@ -222,7 +210,24 @@ class AffineWarping(object):
         result = np.empty((K, T, N))
         return predictwarp(self.x_knots, self.y_knots, self.template, result)
 
-    def transform(self, X):
+    def argsort_warps(self, t=0.5):
+        """
+        """
+        if self.x_knots is None:
+            raise ValueError("Model not initialized. Need to call "
+                             "'AffineWarping.fit(...)' before calling "
+                             "'AffineWarping.argsort_warps(...)'.")
+        if t < 0 or t > 1:
+            raise ValueError('t must be between zero and one.')
+
+        K = len(self.x_knots)
+        kr = np.arange(K)
+        xtst = np.full(K, t)
+        y = np.empty(K)
+        sparsewarp(self.x_knots, self.y_knots, kr, xtst, y)
+        return np.argsort(y)
+
+    def transform(self, X, return_array=True):
         """Apply inverse warping functions to spike data
         """
 
@@ -253,19 +258,32 @@ class AffineWarping(object):
             trials, times, neurons = sparse.where(X)
 
             # find warped time
-            w = sparsewarp(self.x_knots, self.y_knots, trials, times / T)
+            w = sparsealign(self.x_knots, self.y_knots, trials, times / T)
 
-            # return data as a new COO array
-            wtimes = (w * T).astype(int)
-
-            # throw away out of bounds spikes
-            # TODO: add option to expand the dimensions instead
-            i = (wtimes < T) & (wtimes >= 0)
-
-            return sparse.COO([trials[i], wtimes[i], neurons[i]],
-                              data=X.data[i], shape=X.shape)
+            if return_array:
+                # throw away out of bounds spikes
+                wtimes = (w * T).astype(int)
+                i = (wtimes < T) & (wtimes >= 0)
+                return sparse.COO([trials[i], wtimes[i], neurons[i]],
+                                  data=X.data[i], shape=X.shape)
+            else:
+                # return coordinates
+                return (trials, w * T, neurons)
 
         # dense array transform
         else:
             X = np.asarray(X)
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
+
+    def dump_params(self):
+        """Returns a list of model parameters for storage
+        """
+        return {
+            'template': self.template,
+            'x_knots': self.x_knots,
+            'y_knots': self.y_knots,
+            'loss_hist': self.loss_hist,
+            'l2_smoothness': self.l2_smoothness,
+            'q1': self.q1,
+            'q2': self.q2
+        }

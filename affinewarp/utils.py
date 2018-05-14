@@ -1,5 +1,28 @@
 import numpy as np
 from numba import jit
+import sparse
+
+
+def get_spike_coords(data):
+
+    if isinstance(data, sparse.COO):
+        if data.ndim != 3:
+            raise ValueError('Spiking data supplied as a sparse array '
+                             'must have ndim == 3.')
+        return data.coords
+
+    elif isinstance(data, tuple):
+        if len(data) != 3 or len(np.unique([c.size for c in data])) != 1:
+            raise ValueError('Spiking data supplied as a tuple must be 3 '
+                             'lists of equal length specifying trial '
+                             'number, spike time, and neuron id (in that '
+                             'order).')
+        else:
+            return data
+
+    else:
+        raise ValueError('Spiking data must be supplied as tuple or sparse '
+                         'array.')
 
 
 def participation(M):

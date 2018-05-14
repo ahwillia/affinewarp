@@ -3,33 +3,52 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from tqdm import trange
 from sklearn.decomposition import TruncatedSVD
+from .utils import get_spike_coords
 
 
 def rasters(data, subplots=(5, 6), figsize=(9*1.5, 5*1.5),
             max_spikes=7000, **scatter_kw):
 
-    trials, times, neurons = data.coords
+    trials, times, neurons = get_spike_coords(data)
 
     scatter_kw.setdefault('s', 1)
-    scatter_kw.setdefault('color', 'w')
     scatter_kw.setdefault('lw', 0)
+
+    # handle coloring of rasters
+    if 'c' not in scatter_kw:
+        scatter_kw.setdefault('color', 'w')
+        c = None
+    else:
+        c = scatter_kw.pop('c')
 
     fig, axes = plt.subplots(*subplots, figsize=figsize)
 
     for ax, n in zip(axes.ravel(), range(data.shape[2])):
+
+        # select spikes for neuron n
         x, y = times[neurons == n], trials[neurons == n]
+        _c = c[neurons == n] if c is not None else None
+
+        # subsample spikes
         if len(x) > max_spikes:
             idx = np.random.choice(np.arange(len(x)), size=max_spikes,
                                    replace=False)
             x, y = x[idx], y[idx]
-        ax.scatter(x, y, **scatter_kw)
-        ax.set_facecolor('k')
+            if c is not None:
+                _c = _c[idx]
+
+        # make raster plot
+        ax.scatter(x, y, c=_c, **scatter_kw)
+
+        # format axes
         ax.set_title('neuron {}'.format(n), color='w')
+        ax.set_facecolor('k')
         ax.set_xticks([])
         ax.set_yticks([])
         for spine in ax.spines.values():
             spine.set_visible(False)
 
+    # turn off any used axes
     for ax in axes.ravel()[n:]:
         ax.axis('off')
 
