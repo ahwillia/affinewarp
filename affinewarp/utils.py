@@ -135,9 +135,3 @@ def _force_monotonic_knots(X, Y):
                 X[k, p] = 1.0 - 1e-3*(P-p-1)
 
     return X, Y
-
-
-def quad_loss(pred, targ):
-    """Row-wise mean squared Euclidean error between prediction and target array
-    """
-    return np.mean(((pred - targ)**2).reshape(pred.shape[0], -1), axis=-1)

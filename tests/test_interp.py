@@ -47,7 +47,5 @@ def test_warp_penalties():
         assert_allclose(actual, expected, atol=1e-8)
 
 
-
-
 if __name__ == '__main__':
     test_warp_penalties()

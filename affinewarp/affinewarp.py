@@ -2,9 +2,9 @@ import numpy as np
 from scipy.interpolate import interp1d
 import scipy as sci
 from tqdm import trange, tqdm
-from .utils import modf, _fast_template_grams, quad_loss, _force_monotonic_knots
+from .utils import modf, _fast_template_grams, _force_monotonic_knots
 from .interp import warp_with_quadloss, densewarp, sparsewarp, sparsealign, predictwarp, warp_penalties
-from .spikedata import get_spike_coords, get_spike_shape
+from .spikedata import get_spike_coords, get_spike_shape, is_spikedata
 from numba import jit
 import sparse
 
@@ -71,7 +71,14 @@ class AffineWarping(object):
         self.y_knots = self.x_knots.copy()
 
         # compute initial loss
-        self._losses = quad_loss(self.predict(), data)
+        # self._losses = np.zeros(K)
+        # warp_with_quadloss(self.x_knots, self.y_knots, self.template,
+        #                    self._losses, self._losses,
+        #                    data, early_stop=False)
+        resid = (data - data.mean(axis=0, keepdims=True))
+        self._losses = np.mean((resid**2).reshape(data.shape[0], -1), axis=-1)
+
+        # initial warp penalties and loss storage
         self._penalties = np.zeros(K)
         self.loss_hist = [np.mean(self._losses)]
 
@@ -176,22 +183,21 @@ class AffineWarping(object):
             # coefficent matrix for the template update reduce to a
             # banded matrix with 5 diagonals.
             WtW = np.zeros((3, T))
-            WtW[0, 2:] = 1.0 * self.l2_smoothness
-            WtW[1, 2:] = -4.0 * self.l2_smoothness
-            WtW[1, 1] = -2.0 * self.l2_smoothness
-            WtW[2, 2:] = 6.0 * self.l2_smoothness
-            WtW[2, 1] = 5.0 * self.l2_smoothness
-            WtW[2, 0] = 1.0 * self.l2_smoothness
-            _WtW = WtW[1:, :]  # makes _reduce_sum_assign target the right row.
+            lam = self.l2_smoothness * K
+            WtW[0, 2:] = 1.0 * lam
+            WtW[1, 2:] = -4.0 * lam
+            WtW[1, 1] = -2.0 * lam
+            WtW[2, 2:] = 6.0 * lam
+            WtW[2, 1] = 5.0 * lam
+            WtW[2, 0] = 1.0 * lam
         else:
             # coefficent matrix for the template update reduce to a
             # banded matrix with 3 diagonals.
             WtW = np.zeros((2, T))
-            _WtW = WtW
 
-        # compute gramians
+        # Compute gramians.
         WtX = np.zeros((T, data.shape[-1]))
-        _fast_template_grams(_WtW, WtX, data, self.x_knots, self.y_knots)
+        _fast_template_grams(WtW[-2:], WtX, data, self.x_knots, self.y_knots)
 
         # solve WtW * template = WtX
         self.template = sci.linalg.solveh_banded(WtW, WtX)
@@ -257,7 +263,7 @@ class AffineWarping(object):
         T = shape[1]
 
         # sparse array transform
-        try:
+        if is_spikedata(X):
 
             # indices of sparse entries
             trials, times, neurons = get_spike_coords(X)
@@ -276,7 +282,7 @@ class AffineWarping(object):
                 return (trials, w * T, neurons)
 
         # dense array transform
-        except ValueError:
+        else:
             X = np.asarray(X)
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
 

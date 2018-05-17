@@ -18,6 +18,21 @@ def _check_spike_tuple(data):
             'spike time, neuron id (in that order).')
 
 
+def is_spikedata(data):
+    """Returns True if data can be interpreted as spiking data encoded as
+    a sparse 3d tensor. Returns False if data is a dense array.
+    """
+    if isinstance(data, sparse.COO) and data.ndim == 3:
+        return True
+
+    try:
+        _check_spike_tuple(data)
+        return True
+
+    except ValueError:
+        return False
+
+
 def get_spike_coords(data):
     """Returns indices of spike times (trial number, time bin, neuron id)
     """

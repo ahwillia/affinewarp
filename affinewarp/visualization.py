@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from tqdm import trange
 from sklearn.decomposition import TruncatedSVD
-from .spikedata import get_spike_coords
+from .spikedata import get_spike_coords, bin_spikes
 
 
-def rasters(data, subplots=(5, 6), figsize=(9*1.5, 5*1.5),
-            max_spikes=7000, **scatter_kw):
+def rasters(data, subplots=(5, 6), fig=None, axes=None,
+            figsize=(9*1.5, 5*1.5), max_spikes=7000, **scatter_kw):
 
     trials, times, neurons = get_spike_coords(data)
 
@@ -21,18 +21,19 @@ def rasters(data, subplots=(5, 6), figsize=(9*1.5, 5*1.5),
     else:
         c = scatter_kw.pop('c')
 
-    fig, axes = plt.subplots(*subplots, figsize=figsize)
+    if axes is None:
+        fig, axes = plt.subplots(*subplots, figsize=figsize)
 
     for n, ax in enumerate(axes.ravel()):
 
         # select spikes for neuron n
         idx = np.where(neurons == n)[0]
-        
+
         # turn off axis if there are no spikes
         if len(idx) == 0:
             ax.axis('off')
             continue
-        
+
         # subsample spikes
         elif len(idx) > max_spikes:
             idx = np.random.choice(idx, size=max_spikes, replace=False)
@@ -51,8 +52,9 @@ def rasters(data, subplots=(5, 6), figsize=(9*1.5, 5*1.5),
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-    fig.tight_layout()
-    fig.patch.set_facecolor('k')
+    if fig is not None:
+        fig.tight_layout()
+        fig.patch.set_facecolor('k')
 
     return fig, axes
 
@@ -81,58 +83,40 @@ def binned_heatmap(binned, subplots=(5, 6), figsize=(9*1.5, 5*1.5), **kwargs):
     return fig, axes
 
 
-def psth(celldata, ax=None, line_kw=dict(), errbar_kw=dict()):
+def stacked_raster_psth(raw, aligned, nplots=6, figsize=(9*1.5, 5*1.5),
+                        height_ratio=.5, nbins=100, **raster_kw):
 
-    line_kw.setdefault('color', 'k')
+    fig, axes = plt.subplots(3, nplots, figsize=figsize,
+                             gridspec_kw={
+                             'height_ratios': [1, 1, height_ratio]
+                             })
 
-    errbar_kw.setdefault('color', 'r')
-    errbar_kw.setdefault('alpha', 0.1)
+    rasters(raw, axes=axes[0], fig=fig, **raster_kw)
+    rasters(aligned, axes=axes[1], fig=fig, **raster_kw)
 
-    if ax is None:
-        ax = plt.gca()
+    binned_raw = bin_spikes(raw, nbins)
+    binned_align = bin_spikes(aligned, nbins)
 
-    m = celldata.mean(axis=0)
-    se = celldata.std(axis=0)
-    x = np.arange(len(m))
+    raw_m = binned_raw.mean(axis=0)
+    raw_sd = binned_raw.std(axis=0) / np.sqrt(raw.shape[0])
+    align_m = binned_align.mean(axis=0)
+    align_sd = binned_align.std(axis=0) / np.sqrt(aligned.shape[0])
+    x = np.arange(len(raw_m))
 
-    errbar = ax.fill_between(x, m+se, m-se, **errbar_kw)
-    line = ax.plot(x, m, **line_kw)
+    for n, ax in enumerate(axes[-1]):
+        ax.plot(x, raw_m[:, n], color='k')
+        ax.plot(x, align_m[:, n], color='r')
 
-    return line, errbar
+        ax.fill_between(x,
+                        raw_m[:, n] + raw_sd[:, n],
+                        raw_m[:, n] - raw_sd[:, n],
+                        color='k', alpha=.3, zorder=-1)
 
+        ax.fill_between(x,
+                        align_m[:, n] + align_sd[:, n],
+                        align_m[:, n] - align_sd[:, n],
+                        color='r', alpha=.3, zorder=-1)
 
-def dimensionality_change(data, aligned_data, sigma, **scatter_kw):
+    fig.tight_layout()
 
-    ax = plt.gca()
-
-    scatter_kw.setdefault('s', 1)
-    scatter_kw.setdefault('color', 'k')
-    scatter_kw.setdefault('lw', 0)
-
-    n_neurons = data.shape[2]
-
-    x, y = _dim(data, sigma), _dim(aligned_data, sigma)
-    ax.scatter(x, y, **scatter_kw)
-
-    return x, y
-
-
-# def _dim(data, sigma):
-#     tsvd = TruncatedSVD(n_components=1)
-#     r = []
-#     for n in trange(data.shape[2]):
-#         x = np.asarray(data[:, :, n]).astype(float)
-#         xs = gaussian_filter1d(x, sigma, axis=1)
-#         tsvd.fit(xs)
-#         r.append(tsvd.explained_variance_ratio_)
-#     return r
-
-def _dim(data, sigma):
-    tsvd = TruncatedSVD(n_components=1)
-    r = []
-    for n in trange(data.shape[2]):
-        x = np.asarray(data[:, :, n]).astype(float)
-        xs = gaussian_filter1d(x, sigma, axis=1)
-        resid = xs - np.mean(xs, axis=0, keepdims=True)
-        r.append(np.sqrt(np.mean(resid**2)))
-    return r
+    return fig, axes
