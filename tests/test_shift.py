@@ -1,0 +1,16 @@
+import numpy as np
+from affinewarp.shiftwarp import _fill_WtW
+
+
+def test_WtW():
+
+    # test that correct number of counts
+    K, T = 100, 101
+    shifts = np.random.randint(-25, 26, size=K)
+    WtW = np.zeros(T)
+    _fill_WtW(shifts, WtW)
+    assert int(WtW.sum()) == (K * T)
+
+
+if __name__ == '__main__':
+    test_WtW()

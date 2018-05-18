@@ -1,24 +1,38 @@
 import numpy as np
 from numba import jit
 from tqdm import trange
+import scipy as sci
+from sklearn.utils.validation import check_is_fitted
+from .spikedata import is_spikedata, get_spike_shape, get_spike_coords
+from .utils import _diff_gramian
+import sparse
 
 
 class ShiftWarping(object):
     """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, maxlag=.2, shift_penalty=.1):
+    def __init__(self, maxlag=.2, warpreg=0, l2_smoothness=0):
         """
         Params
         ------
+        maxlag : float
+            maximal allowable shift
+        warpreg : float
+            strength of penalty on the magnitude of the shifts
+        l2_smoothness : float
+            strength of roughness penalty on the template
         """
 
         # data dimensions
         self.maxlag = maxlag
-        self.template = None
         self.loss_hist = []
-        self.shift_penalty = .1
+        self.warpreg = warpreg
+        self.l2_smoothness = l2_smoothness
+
 
     def fit(self, data, iterations=10, verbose=True):
+        """Fit shift warping to data.
+        """
 
         # data dimensions:
         #   K = number of trials
@@ -28,27 +42,32 @@ class ShiftWarping(object):
 
         L = int(self.maxlag * T)
         losses = np.empty((K, 2*L+1))
-        self.WtW = np.zeros(T)
-        self.WtX = np.zeros((T, N))
+        self.loss_hist = []
+
+        WtW = np.zeros((3, T))
+        WtX = np.zeros((T, N))
+
         self.template = data.mean(axis=0)
-        # regularization = self.shift_penalty *\
-        #     np.tile(np.abs(np.arange(-L, L+1)), (K, 1))
 
         pbar = trange(iterations) if verbose else range(iterations)
-        self.loss_hist = []
+
+        # fill l2 penalty banded matrix
+        DtD = _diff_gramian(T, self.l2_smoothness * K)
 
         for i in pbar:
 
             # compute the loss for each shift
             losses.fill(0.0)
             _compute_shifted_loss(data, self.template, losses)
+            losses /= (T * N)
 
             # find the best shift for each trial
             s = np.argmin(losses, axis=1)
+
             self.shifts = -L + s
 
             # compute the total loss
-            total_loss = np.sqrt(losses[np.arange(K), s].sum())
+            total_loss = np.mean(losses[np.arange(K), s])
             self.loss_hist.append(total_loss)
 
             # update loss display
@@ -56,15 +75,20 @@ class ShiftWarping(object):
                 pbar.set_description('Loss: {0:.2f}'.format(total_loss))
 
             # update template
-            self.WtW.fill(0.0)
-            self.WtX.fill(0.0)
+            WtW.fill(0.0)
+            WtX.fill(0.0)
 
-            _fill_WtW(self.shifts, self.WtW)
-            _fill_WtX(data, self.shifts, self.WtX)
+            _fill_WtW(self.shifts, WtW[-1])
+            _fill_WtX(data, self.shifts, WtX)
 
-            self.template = self.WtX / self.WtW[:, None]
+            self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
+
+    def argsort_warps(self):
+        check_is_fitted(self, 'shifts')
+        return np.argsort(self.shifts)
 
     def predict(self):
+        check_is_fitted(self, 'shifts')
         K = len(self.shifts)
         T, N = self.template.shape
         pred = np.empty((K, T, N))
@@ -72,10 +96,23 @@ class ShiftWarping(object):
         return pred
 
     def transform(self, data):
-        K, T, N = data.shape
-        out = np.empty_like(data)
-        _warp_data(data, self.shifts, out)
-        return out
+        check_is_fitted(self, 'shifts')
+
+        if is_spikedata(data):
+            # indices of sparse entries
+            shape = get_spike_shape(data)
+            trials, times, neurons = get_spike_coords(data)
+            wtimes = times + self.shifts[trials]
+            i = (wtimes > 0) & (wtimes < shape[1])
+            return sparse.COO([trials[i], wtimes[i], neurons[i]],
+                              data=np.ones(i.sum()), shape=shape)
+
+        else:
+            # warp dense data
+            K, T, N = data.shape
+            out = np.empty_like(data)
+            _warp_data(data, self.shifts, out)
+            return out
 
 
 @jit(nopython=True)
@@ -102,14 +139,14 @@ def _predict(template, shifts, out):
 def _fill_WtW(shifts, out):
     T = len(out)
     for s in shifts:
-        if s <= 0:
-            out[0] += 1 - s
-            for i in range(1, T + s):
-                out[i] += 1
-        elif s > 0:
-            out[-1] += 1 + s
-            for i in range(2, T - s + 1):
+        if s < 0:
+            out[-1] += 1 - s
+            for i in range(2, T + s + 1):
                 out[-i] += 1
+        else:
+            out[0] += 1 + s
+            for i in range(1, T - s):
+                out[i] += 1
 
 
 @jit(nopython=True)
@@ -118,17 +155,15 @@ def _fill_WtX(data, shifts, out):
     for k in range(K):
         i = -shifts[k]
         t = 0
-        while i < 0:
-            out[0] += data[k, t]
-            t += 1
+
+        for t in range(T):
+            if i < 0:
+                out[0] += data[k, t]
+            elif i >= T:
+                out[-1] += data[k, t]
+            else:
+                out[i] += data[k, t]
             i += 1
-        while (i < T) and (t < T):
-            out[i] += data[k, t]
-            t += 1
-            i += 1
-        while t < T:
-            out[-1] += data[k, t]
-            t += 1
 
 
 @jit(nopython=True)
@@ -159,10 +194,14 @@ def _compute_shifted_loss(data, template, losses):
     for k in range(K):
         for t in range(T):
             for l in range(-L, L+1):
+
+                # shifted index
+                i = t - l
+                if i < 0:
+                    i = 0
+                elif i >= T:
+                    i = T-1
+
+                # quadratic loss
                 for n in range(N):
-                    i = t - l
-                    if i < 0:
-                        i = 0
-                    elif i >= T:
-                        i = T-1
                     losses[k, l+L] += (data[k, t, n] - template[i, n])**2
