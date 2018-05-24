@@ -6,17 +6,20 @@ from sklearn.decomposition import TruncatedSVD
 from .spikedata import get_spike_coords, bin_spikes
 
 
-def rasters(data, subplots=(5, 6), fig=None, axes=None,
-            figsize=(9*1.5, 5*1.5), max_spikes=7000, **scatter_kw):
+def rasters(data, subplots=(5, 6), fig=None, axes=None, figsize=(9*1.5, 5*1.5),
+            max_spikes=7000, style='black', **scatter_kw):
 
     trials, times, neurons = get_spike_coords(data)
+
+    background = 'k' if style == 'black' else 'w'
+    foreground = 'w' if style == 'black' else 'k'
 
     scatter_kw.setdefault('s', 1)
     scatter_kw.setdefault('lw', 0)
 
     # handle coloring of rasters
     if 'c' not in scatter_kw:
-        scatter_kw.setdefault('color', 'w')
+        scatter_kw.setdefault('color', foreground)
         c = None
     else:
         c = scatter_kw.pop('c')
@@ -45,8 +48,8 @@ def rasters(data, subplots=(5, 6), fig=None, axes=None,
             ax.scatter(times[idx], trials[idx], **scatter_kw)
 
         # format axes
-        ax.set_title('neuron {}'.format(n), color='w')
-        ax.set_facecolor('k')
+        ax.set_title('neuron {}'.format(n), color=foreground)
+        ax.set_facecolor(background)
         ax.set_xticks([])
         ax.set_yticks([])
         for spine in ax.spines.values():
@@ -54,7 +57,7 @@ def rasters(data, subplots=(5, 6), fig=None, axes=None,
 
     if fig is not None:
         fig.tight_layout()
-        fig.patch.set_facecolor('k')
+        fig.patch.set_facecolor(background)
 
     return fig, axes
 

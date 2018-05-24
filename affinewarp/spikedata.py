@@ -13,9 +13,19 @@ def _check_spike_tuple(data):
         all(np.issubdtype(c.dtype, np.integer) for c in data)
     ):
         raise ValueError(
-            'Spiking data supplied as a tuple must be 3 arrays holding '
+            'Spiking data supplied as a tuple must be three 1d arrays holding '
             'integers. Arrays must be equal length specifying trial number, '
             'spike time, neuron id (in that order).')
+
+
+def assert_spike_data(data):
+    if not is_spikedata(data):
+        raise ValueError(
+            "Expected input in a spike data format. Accepted formats include "
+            "sparse 3d arrays (trials x times x neurons) in COO format or a "
+            "tuple of three, 1d arrays holding integer indices corresponding "
+            "to trial number, spike time, neuron id (in that order)."
+        )
 
 
 def is_spikedata(data):
@@ -70,11 +80,7 @@ def bin_spikes(data, nbins, shape=None):
 
     # get spike indices
     trials, times, neurons = get_spike_coords(data)
-
-    try:
-        shape = data.shape
-    except AttributeError:
-        shape = [trials.max()+1, times.max()+1, neurons.max()+1]
+    shape = get_spike_shape(data)
 
     n_trials = shape[0]
     n_timepoints = shape[1]
@@ -92,6 +98,32 @@ def bin_spikes(data, nbins, shape=None):
 
     # return (trials x timebins x neurons) array of binned spike counts
     return binned
+
+
+def trial_average_spikes(data, nbins, shape=None):
+    """Bin spike data into dense 3d tensor (trials x nbins x neurons)
+    """
+
+    # get spike indices
+    trials, times, neurons = get_spike_coords(data)
+    shape = get_spike_shape(data)
+
+    n_trials = shape[0]
+    n_timepoints = shape[1]
+    n_neurons = shape[2]
+
+    # compute bin id for each spike time
+    #   - note: dividing by n_timepoints first is actually critical if data
+    #           is provided as sparse.COO, which provides coords as uint16,
+    #           leading to overflow if multiplication is done first.
+    bin_ind = (nbins * (times / n_timepoints)).astype(int)
+
+    # bin spikes, collapsing across trial dimension
+    psth = np.zeros((1, nbins, n_neurons), dtype=int)
+    _bin_assign(psth, np.zeros_like(trials), bin_ind, neurons)
+
+    # return (timebins x neurons) array of mean spike counts
+    return np.squeeze(psth) / n_trials
 
 
 def calc_snr(data, nbins=None):
