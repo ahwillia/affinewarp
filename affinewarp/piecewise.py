@@ -106,8 +106,8 @@ def sparsealign(_X, _Y, trials, xtst):
 @jit(nopython=True)
 def densewarp(X, Y, data, out):
 
-    K = data.shape[0]
-    T = data.shape[1]
+    K = out.shape[0]
+    T = out.shape[1]
     n_knots = X.shape[1]
 
     for k in range(K):
@@ -119,6 +119,12 @@ def densewarp(X, Y, data, out):
 
         # 'n' counts knots in piecewise affine warping function.
         n = 1
+
+        # broadcast across trials if data has shape 1 x T x N
+        if data.shape[0] == 1:
+            kk = 0
+        else:
+            kk = k
 
         # iterate over all time bins, stop early if loss is too high.
         for t in range(T):
@@ -137,59 +143,14 @@ def densewarp(X, Y, data, out):
             z = y0 + slope*(x - x0)
 
             if z <= 0:
-                out[k, t] = data[k, 0]
+                out[k, t] = data[kk, 0]
             elif z >= 1:
-                out[k, t] = data[k, -1]
+                out[k, t] = data[kk, -1]
             else:
                 _i = z * (T-1)
                 rem = _i % 1
                 i = int(_i)
-                out[k, t] = (1-rem) * data[k, i] + rem * data[k, i+1]
-
-    return out
-
-
-@jit(nopython=True)
-def predictwarp(X, Y, template, out):
-
-    K, T, N = out.shape
-    n_knots = X.shape[1]
-
-    for k in range(K):
-
-        # initialize line segement for interpolation
-        y0 = Y[k, 0]
-        x0 = X[k, 0]
-        slope = (Y[k, 1] - Y[k, 0]) / (X[k, 1] - X[k, 0])
-
-        # 'n' counts knots in piecewise affine warping function.
-        n = 1
-
-        # iterate over all time bins, stop early if loss is too high.
-        for t in range(T):
-
-            # fraction of trial complete
-            x = t / (T - 1)
-
-            # update interpolation point
-            while (n < n_knots-1) and (x > X[k, n]):
-                y0 = Y[k, n]
-                x0 = X[k, n]
-                slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
-                n += 1
-
-            # compute index in warped time
-            z = y0 + slope*(x - x0)
-
-            if z <= 0:
-                out[k, t] = template[0]
-            elif z >= 1:
-                out[k, t] = template[-1]
-            else:
-                _i = z * (T-1)
-                rem = _i % 1
-                i = int(_i)
-                out[k, t] = (1-rem) * template[i] + rem * template[i+1]
+                out[k, t] = (1-rem) * data[kk, i] + rem * data[kk, i+1]
 
     return out
 

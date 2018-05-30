@@ -5,7 +5,7 @@ from .utils import _diff_gramian
 from sklearn.utils.validation import check_is_fitted
 from .spikedata import get_spike_coords, get_spike_shape, is_spikedata
 from .piecewise import force_monotonic_knots, warp_penalties
-from .piecewise import sparsewarp, sparsealign, densewarp, predictwarp
+from .piecewise import sparsewarp, sparsealign, densewarp
 from numba import jit
 import sparse
 
@@ -221,7 +221,8 @@ class AffineWarping(object):
         K = self.x_knots.shape[0]
         T, N = self.template.shape
         result = np.empty((K, T, N))
-        return predictwarp(self.x_knots, self.y_knots, self.template, result)
+        return densewarp(self.x_knots, self.y_knots,
+                         self.template[None, :, :], result)
 
     def argsort_warps(self, t=0.5):
         """Sort trial indices by their warping functions.
