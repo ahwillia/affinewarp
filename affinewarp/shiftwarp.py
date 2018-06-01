@@ -3,8 +3,8 @@ from numba import jit
 from tqdm import trange
 import scipy as sci
 from sklearn.utils.validation import check_is_fitted
-from .spikedata import is_spikedata, get_spike_shape, get_spike_coords
-from .utils import _diff_gramian
+from .spikedata import is_spike_data, get_spike_shape, get_spike_coords
+from .utils import _diff_gramian, check_data_tensor
 import sparse
 
 
@@ -28,7 +28,6 @@ class ShiftWarping(object):
         self.loss_hist = []
         self.warpreg = warpreg
         self.l2_smoothness = l2_smoothness
-
 
     def fit(self, data, iterations=10, verbose=True):
         """Fit shift warping to data.
@@ -83,6 +82,8 @@ class ShiftWarping(object):
 
             self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
+        self.fractional_shifts = self.shifts / T
+
     def argsort_warps(self):
         check_is_fitted(self, 'shifts')
         return np.argsort(self.shifts)
@@ -97,13 +98,15 @@ class ShiftWarping(object):
 
     def transform(self, data):
         check_is_fitted(self, 'shifts')
+        data, is_spikes = check_data_tensor(data)
 
-        if is_spikedata(data):
+        if is_spikes:
             # indices of sparse entries
             shape = get_spike_shape(data)
             trials, times, neurons = get_spike_coords(data)
-            wtimes = times + self.shifts[trials]
-            i = (wtimes > 0) & (wtimes < shape[1])
+            T = shape[1]
+            wtimes = (((times/T) - self.fractional_shifts[trials])*T).astype(int)
+            i = (wtimes > 0) & (wtimes < T)
             return sparse.COO([trials[i], wtimes[i], neurons[i]],
                               data=np.ones(i.sum()), shape=shape)
 
@@ -113,6 +116,21 @@ class ShiftWarping(object):
             out = np.empty_like(data)
             _warp_data(data, self.shifts, out)
             return out
+
+    def event_transform(self, times):
+        # must be fitted before transform
+        check_is_fitted(self, 'shifts')
+
+        # check input
+        if not isinstance(times, np.ndarray):
+            raise ValueError('Input must be a ndarray of event times.')
+
+        # check that there is one event per trial
+        if times.shape[0] != len(self.shifts):
+            raise ValueError('Number of trials in the input does not match '
+                             'the number of trials in the fitted model.')
+
+        return times - self.fractional_shifts
 
 
 @jit(nopython=True)

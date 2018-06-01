@@ -28,7 +28,7 @@ def assert_spike_data(data):
         )
 
 
-def is_spikedata(data):
+def is_spike_data(data):
     """Returns True if data can be interpreted as spiking data encoded as
     a sparse 3d tensor. Returns False if data is a dense array.
     """
@@ -101,7 +101,7 @@ def bin_spikes(data, nbins, shape=None):
 
 
 def trial_average_spikes(data, nbins, shape=None):
-    """Bin spike data into dense 3d tensor (trials x nbins x neurons)
+    """Bin and average spike data into dense matrix (nbins x neurons)
     """
 
     # get spike indices

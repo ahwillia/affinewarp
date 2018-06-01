@@ -1,9 +1,9 @@
 import numpy as np
 import scipy as sci
 from tqdm import trange, tqdm
-from .utils import _diff_gramian
+from .utils import _diff_gramian, check_data_tensor
 from sklearn.utils.validation import check_is_fitted
-from .spikedata import get_spike_coords, get_spike_shape, is_spikedata
+from .spikedata import get_spike_coords, get_spike_shape, is_spike_data
 from .piecewise import force_monotonic_knots, warp_penalties
 from .piecewise import sparsewarp, sparsealign, densewarp
 from numba import jit
@@ -51,11 +51,11 @@ class AffineWarping(object):
         """
 
         # check data dimensions as input
-        data = np.asarray(data)
+        data, is_spikes = check_data_tensor(data)
 
         # check if dense array
-        if data.ndim != 3 or not np.issubdtype(data.dtype, np.number):
-            raise ValueError("'data' must be provided as a numpy ndarray "
+        if is_spikes:
+            raise ValueError("'data' must be provided as a dense numpy array "
                              "(neurons x timepoints x trials) holding binned "
                              "spike data.")
 
@@ -116,24 +116,12 @@ class AffineWarping(object):
             # update warping functions
             self._fit_warps(data, warp_iterations)
 
-            # user has option to only fit warps
+            # update template, user has option to only fit warps
             if fit_template:
-
-                # update template
                 self._fit_template(data)
 
-                # update reconstruction and evaluate loss
-                self._losses.fill(0.0)
-                warp_with_quadloss(self.x_knots, self.y_knots, self.template,
-                                   self._losses, self._losses,
-                                   data, early_stop=False)
-
-                # add warping penalty to losses
-                if self.warpreg > 0:
-                    self._losses += self._penalties
-
-            # store objective function over time
-            self.loss_hist.append(self._losses.mean())
+            # compute and save loss function over training
+            self._record_loss(data)
 
             # display progress
             if verbose:
@@ -252,17 +240,14 @@ class AffineWarping(object):
         """
         Apply inverse warping functions to dense or spike data.
         """
+        # model must be fitted to perform transform
         check_is_fitted(self, 'x_knots')
+
+        # check that X is an appropriate tensor format
+        X, is_spikes = check_data_tensor(X)
 
         # get data dimensions
         shape = get_spike_shape(X)
-        ndim = len(shape)
-
-        # add append new axis to 2d array if necessary
-        if ndim == 2:
-            X = X[:, :, None]
-        elif ndim != 3:
-            raise ValueError('Input should be 2d or 3d array.')
 
         # check that first axis of X matches n_trials
         if shape[0] != len(self.x_knots):
@@ -273,7 +258,7 @@ class AffineWarping(object):
         T = shape[1]
 
         # sparse array transform
-        if is_spikedata(X):
+        if is_spikes:
 
             # indices of sparse entries
             trials, times, neurons = get_spike_coords(X)
@@ -293,8 +278,99 @@ class AffineWarping(object):
 
         # dense array transform
         else:
-            X = np.asarray(X)
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
+
+    def event_transform(self, times):
+        # model must be fitted to perform transform
+        check_is_fitted(self, 'x_knots')
+
+        # check input
+        if not isinstance(times, np.ndarray):
+            raise ValueError('Input must be a ndarray of event times.')
+
+        # check that there is one event per trial
+        if times.shape[0] != len(self.x_knots):
+            raise ValueError('Number of trials in the input does not match '
+                             'the number of trials in the fitted model.')
+
+        trials = np.arange(times.shape[0])
+        wtimes = sparsealign(self.x_knots, self.y_knots, trials, times)
+        return wtimes
+
+    def manual_fit(self, data, t0, t1=None, recenter=True):
+
+        if self.n_knots > 0:
+            raise AttributeError('Manual alignment is only supported for '
+                                 'linear warping (n_knots=0) models.')
+
+        # check data dimensions as input
+        data, is_spikes = check_data_tensor(data)
+
+        # check if dense array
+        if is_spikes:
+            raise ValueError("'data' must be provided as a dense numpy array "
+                             "(neurons x timepoints x trials) holding binned "
+                             "spike data.")
+
+        # check that first warping constraint is well-specified
+        if (
+            t0.ndim != 2 or
+            t0.shape[0] != data.shape[0] or
+            t0.shape[1] != 2 or
+            not np.issubdtype(t0.dtype, np.floating)
+        ):
+            raise ValueError("Parameter 't0' must be a K x 2 matrix of "
+                             "floating point elements, where K is the number "
+                             "of trials in the dataset.")
+
+        # if only one warping constraint is manually specified, use unit slopes
+        if t1 is None:
+            t1 = t0 + 0.1
+
+        # check that second warping constraint is well-specified
+        elif (
+            t1.ndim != 2 or
+            t1.shape[0] != data.shape[0] or
+            t1.shape[1] != 2 or
+            not np.issubdtype(t1.dtype, np.floating)
+        ):
+            raise ValueError("Parameter 't1' must be a K x 2 matrix of "
+                             "floating point elements, where K is the number "
+                             "of trials in the dataset.")
+
+        # compute slopes and intercepts of the warping functions
+        dxdy = (t1 - t0)
+        slopes = dxdy[:, 1] / dxdy[:, 0]
+        intercepts = t0[:, 1] - slopes * t0[:, 0]
+
+        # recenter warps
+        if recenter:
+            slopes /= slopes.mean()
+            intercepts -= intercepts.mean()
+
+        # use slopes and intercepts to determine warping knots
+        self.x_knots = np.tile([0., 1.], (data.shape[0], 1))
+        self.y_knots = np.column_stack([intercepts, intercepts + slopes])
+
+        # find best template given these knots and compute model loss
+        self._fit_template(data)
+        self._losses = np.zeros(data.shape[0])
+        self.loss_hist = []
+        self._record_loss(data)
+
+    def _record_loss(self, data):
+
+        # update reconstruction and evaluate loss
+        self._losses.fill(0.0)
+        warp_with_quadloss(self.x_knots, self.y_knots, self.template,
+                           self._losses, self._losses, data, early_stop=False)
+
+        # add warping penalty to losses
+        if self.warpreg > 0:
+            self._losses += self._penalties
+
+        # store objective function over time
+        self.loss_hist.append(self._losses.mean())
 
 
 @jit(nopython=True)
