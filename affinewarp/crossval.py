@@ -23,7 +23,10 @@ def kfold(N, n_splits):
         i += 1
 
 
-def crossval_neurons(model, data, binned, **kwargs):
+def heldout_transform(model, data, binned, **kwargs):
+    """
+    TODO
+    """
 
     kwargs.setdefault('verbose', False)
 
@@ -32,7 +35,6 @@ def crossval_neurons(model, data, binned, **kwargs):
 
     # transformed spike times
     aligned_data = []
-    results = []
 
     # hold out each feature, and compute its transforms
     for n in trange(n_neurons):
@@ -42,14 +44,14 @@ def crossval_neurons(model, data, binned, **kwargs):
 
         # fit model and save parameters
         model.fit(binned[:, :, trainset], **kwargs)
-        results.append(model.dump_params())
+        # results.append(model.dump_params())
 
         # warp test set
         aligned_data.append(model.transform(data[:, :, n]))
 
     aligned_data = sparse.concatenate(aligned_data, axis=2)
 
-    return aligned_data, results
+    return aligned_data
 
 
 def hyperparam_search(data, n_models=10, frac_test_trials=.25,

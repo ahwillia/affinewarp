@@ -155,6 +155,8 @@ def densewarp(X, Y, data, out):
     return out
 
 
+# TODO - think about other parameterizations (dx and dy directly)
+
 @jit(nopython=True)
 def force_monotonic_knots(X, Y):
     K, P = X.shape

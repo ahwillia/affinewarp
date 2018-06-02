@@ -64,15 +64,14 @@ class AffineWarping(object):
         T = data.shape[1]
         N = data.shape[2]
 
-        # initialize template
-        self.template = data.mean(axis=0).astype(float)
-
         # initialize warping functions to identity
         self.x_knots = np.tile(
             np.linspace(0, 1, self.n_knots+2),
             (K, 1)
         )
         self.y_knots = self.x_knots.copy()
+
+        self.template = self._fit_template(data)
 
         # compute initial loss
         self._losses = np.zeros(K)
