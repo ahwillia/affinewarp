@@ -45,8 +45,9 @@ class ShiftWarping(object):
 
         WtW = np.zeros((3, T))
         WtX = np.zeros((T, N))
-
-        self.template = data.mean(axis=0)
+        _fill_WtW(self.shifts, WtW[-1])
+        _fill_WtX(data, self.shifts, WtX)
+        self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
         pbar = trange(iterations) if verbose else range(iterations)
 
