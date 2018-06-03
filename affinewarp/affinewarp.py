@@ -297,6 +297,26 @@ class AffineWarping(object):
         return wtimes
 
     def manual_fit(self, data, t0, t1=None, recenter=True):
+        """
+        Set warping functions and template manually to user-defined events
+
+        Parameters
+        ----------
+        data : ndarray (trials x time x neurons)
+            dense array of neural neural time series data
+        t0 : ndarray (trials x 2)
+            x position (first column) and y position (second column) of desired
+            warping function on each trial
+        t1 (optional) : trials x 2
+            if specified, x position (first column) and y position (second
+            column) of another point in the warping function.
+
+        Notes
+        -----
+        If t1 is not specified, then the data are transformed only by shifting.
+        If t1 is specified, then the data are shifted and scaled to accomdate
+        both constraints.
+        """
 
         if self.n_knots > 0:
             raise AttributeError('Manual alignment is only supported for '

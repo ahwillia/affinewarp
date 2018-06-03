@@ -38,6 +38,7 @@ class ShiftWarping(object):
         #   T = number of timepoints
         #   N = number of features/neurons
         K, T, N = data.shape
+        self.shifts = np.zeros(K)
 
         L = int(self.maxlag * T)
         losses = np.empty((K, 2*L+1))
