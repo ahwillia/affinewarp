@@ -39,23 +39,24 @@ class ShiftWarping(object):
         #   N = number of features/neurons
         K, T, N = data.shape
 
-        # initialize
+        # initialize shifts
         DtD = _diff_gramian(T, self.l2_smoothness * K)
         self.shifts = np.zeros(K, dtype=int)
-
         L = int(self.maxlag * T)
-        losses = np.empty((K, 2*L+1))
-        self.loss_hist = []
 
+        # initialize template
         WtW = np.zeros((3, T))
         WtX = np.zeros((T, N))
         _fill_WtW(self.shifts, WtW[-1])
         _fill_WtX(data, self.shifts, WtX)
         self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
+        # initialize learning curve
+        losses = np.empty((K, 2*L+1))
+        self.loss_hist = []
         pbar = trange(iterations) if verbose else range(iterations)
 
-
+        # main loop
         for i in pbar:
 
             # compute the loss for each shift

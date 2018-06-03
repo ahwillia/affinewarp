@@ -93,7 +93,7 @@ def bin_spikes(data, nbins, shape=None):
     bin_ind = (nbins * (times / n_timepoints)).astype(int)
 
     # bin spikes
-    binned = np.zeros((n_trials, nbins, n_neurons), dtype=int)
+    binned = np.zeros((n_trials, nbins, n_neurons))
     _bin_assign(binned, trials, bin_ind, neurons)
 
     # return (trials x timebins x neurons) array of binned spike counts
