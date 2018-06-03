@@ -38,6 +38,9 @@ class ShiftWarping(object):
         #   T = number of timepoints
         #   N = number of features/neurons
         K, T, N = data.shape
+
+        # initialize
+        DtD = _diff_gramian(T, self.l2_smoothness * K)
         self.shifts = np.zeros(K, dtype=int)
 
         L = int(self.maxlag * T)
@@ -52,8 +55,6 @@ class ShiftWarping(object):
 
         pbar = trange(iterations) if verbose else range(iterations)
 
-        # fill l2 penalty banded matrix
-        DtD = _diff_gramian(T, self.l2_smoothness * K)
 
         for i in pbar:
 
