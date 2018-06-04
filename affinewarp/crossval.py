@@ -2,6 +2,7 @@ import numpy as np
 from affinewarp import AffineWarping
 from tqdm import trange
 import sparse
+from copy import deepcopy
 
 
 def kfold(N, n_splits):
@@ -23,18 +24,38 @@ def kfold(N, n_splits):
         i += 1
 
 
-def heldout_transform(model, data, binned, **kwargs):
+def heldout_transform(models, binned, data=None, warmstart=True, **fit_kw):
     """
-    TODO
+    Parameters
+    ----------
+    models : iterable
+        sequence of models to be fit
+    binned : numpy.ndarray
+        array holding binned spike times (trials x times x neurons)
+    data (optional) : numpy.ndarray or sparse.COO
+        Array holding data to be transformed
+    warmstart (optional) : bool
+        If True, initialize warps with learned from last model fit.
     """
 
-    kwargs.setdefault('verbose', False)
+    # broadcast keywords into dict, with model instances as keys
+    fit_kw['verbose'] = False
+    fit_kw = {m: deepcopy(fit_kw) for m in models}
+
+    # warmstart each model from the warps fit on the previous model.
+    if warmstart:
+        for m1, m0 in zip(models[1:], models):
+            fit_kw[m1]['init_warps'] = m0
 
     # data dimensions
     n_neurons = binned.shape[-1]
 
+    # if no data is provided, transform binned data
+    if data is None:
+        data = binned.copy()
+
     # transformed spike times
-    aligned_data = []
+    aligned_data = [[] for m in models]
 
     # hold out each feature, and compute its transforms
     for n in trange(n_neurons):
@@ -43,13 +64,17 @@ def heldout_transform(model, data, binned, **kwargs):
         trainset = list(set(range(n_neurons)) - {n})
 
         # fit model and save parameters
-        model.fit(binned[:, :, trainset], **kwargs)
-        # results.append(model.dump_params())
+        for i, m in enumerate(models):
+            m.fit(binned[:, :, trainset], **fit_kw[m])
 
-        # warp test set
-        aligned_data.append(model.transform(data[:, :, n]))
+            # warp test set
+            aligned_data[i].append(m.transform(data[:, :, n]))
 
-    aligned_data = sparse.concatenate(aligned_data, axis=2)
+    # concatenate transformed data
+    if isinstance(data, sparse.COO):
+        aligned_data = [sparse.concatenate(a, axis=2) for a in aligned_data]
+    else:
+        aligned_data = [np.concatenate(a, axis=2) for a in aligned_data]
 
     return aligned_data
 

@@ -6,6 +6,7 @@ from sklearn.utils.validation import check_is_fitted
 from .spikedata import get_spike_coords, get_spike_shape, is_spike_data
 from .piecewise import force_monotonic_knots, warp_penalties
 from .piecewise import sparsewarp, sparsealign, densewarp
+from .shiftwarp import ShiftWarping
 from numba import jit
 import sparse
 
@@ -26,6 +27,7 @@ class AffineWarping(object):
         self.l2_smoothness = l2_smoothness
         self.min_temp = min_temp
         self.max_temp = max_temp
+        self.loss_hist = []
 
     def _mutate_knots(self, temperature):
         """
@@ -45,10 +47,44 @@ class AffineWarping(object):
             x[:, 1:-1] += np.random.randn(K, self.n_knots) * temperature
         return force_monotonic_knots(x, y)
 
-    def fit(self, data, **kwargs):
+    def fit(self, data, iterations=10, warp_iterations=20, fit_template=True,
+            verbose=True, init_warps='identity', overwrite_loss_hist=True):
         """
-        Initializes warping functions and model template and begin fitting.
+        Continues optimization of warps and template (no initialization).
+
+        Parameters
+        ----------
+        data : ndarray
+            3d array (trials x times x features) holding signals to be fit.
+        iterations : int
+            number of iterations before stopping
+        warp_iterations : int
+            number of inner iterations to fit warping functions
+        verbose (optional) : bool
+            whether to display progressbar while fitting (default: True)
         """
+
+        # initialize warping functions
+        if init_warps == 'identity':
+            self.x_knots = np.tile(
+                np.linspace(0, 1, self.n_knots+2),
+                (data.shape[0], 1)
+            )
+            self.y_knots = self.x_knots.copy()
+
+        elif isinstance(init_warps, (AffineWarping, ShiftWarping)):
+            self.copy_fit(init_warps)
+
+        # initialization procedure not recognized, check if warps already
+        # exist and use them if possible.
+        if not hasattr(self, 'x_knots'):
+            raise ValueError('Tried to fit model without initializing warps.')
+
+        # check if warps exist but don't match data dimensions.
+        if self.x_knots.shape[0] != data.shape[0]:
+            raise ValueError(
+                'Initial warping functions must equal the number of trials.'
+            )
 
         # check data dimensions as input
         data, is_spikes = check_data_tensor(data)
@@ -59,52 +95,11 @@ class AffineWarping(object):
                              "(neurons x timepoints x trials) holding binned "
                              "spike data.")
 
-        # data dimensions
-        K = data.shape[0]
-        T = data.shape[1]
-        N = data.shape[2]
-
-        # initialize warping functions to identity
-        self.x_knots = np.tile(
-            np.linspace(0, 1, self.n_knots+2),
-            (K, 1)
-        )
-        self.y_knots = self.x_knots.copy()
-
-        self.template = self._fit_template(data)
-
-        # compute initial loss
-        self._losses = np.zeros(K)
-        warp_with_quadloss(self.x_knots, self.y_knots, self.template,
-                           self._losses, self._losses,
-                           data, early_stop=False)
-
-        # initial warp penalties and loss storage
-        self._penalties = np.zeros(K)
-        self.loss_hist = [np.mean(self._losses)]
-
-        # arrays used in fit_warps function
-        self._new_losses = np.empty_like(self._losses)
-        self._new_penalties = np.empty_like(self._losses)
-
-        # call fitting function
-        self.continue_fit(data, **kwargs)
-
-    def continue_fit(self, data, iterations=10, warp_iterations=20,
-                     fit_template=True, verbose=True):
-        """
-        Continues optimization of warps and template (no initialization).
-
-        Parameters
-        ----------
-        data : ndarray
-            3d array (trials x times x features) holding signals to be fit.
-        """
-        check_is_fitted(self, 'template')
-
-        # check inputs
-        if data.shape[-1] != self.template.shape[1]:
-            raise ValueError('Dimension mismatch.')
+        # set up storage for loss
+        K, T, N = data.shape
+        self._initialize_storage(K)
+        if overwrite_loss_hist:
+            self.loss_hist = []
 
         # progress bar
         pbar = trange(iterations) if verbose else range(iterations)
@@ -112,22 +107,14 @@ class AffineWarping(object):
         # fit model
         for it in pbar:
 
+            # update template, user has option to only fit warps
+            self._fit_template(data)
+
             # update warping functions
             self._fit_warps(data, warp_iterations)
 
-            # update template, user has option to only fit warps
-            if fit_template:
-                self._fit_template(data)
-
             # compute and save loss function over training
             self._record_loss(data)
-
-            # display progress
-            if verbose:
-                imp = 100 * (self.loss_hist[-2] - self.loss_hist[-1]) / self.loss_hist[-2]
-                pbar.set_description('Loss improvement: {0:.2f}%'.format(imp))
-
-        return self
 
     def _fit_warps(self, data, iterations=20):
         """
@@ -166,7 +153,7 @@ class AffineWarping(object):
 
     def _fit_template(self, data):
         """
-        Fit warping template by local random search. Typically, users should
+        Fit warping template by least squares. Typically, users should
         call either AffineWarping.fit(...) or AffineWarping.continue_fit(...)
         instead of this function.
         """
@@ -280,6 +267,10 @@ class AffineWarping(object):
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
 
     def event_transform(self, times):
+        """
+        Time warp events by applying inverse warping functions.
+        """
+
         # model must be fitted to perform transform
         check_is_fitted(self, 'x_knots')
 
@@ -295,6 +286,41 @@ class AffineWarping(object):
         trials = np.arange(times.shape[0])
         wtimes = sparsealign(self.x_knots, self.y_knots, trials, times)
         return wtimes
+
+    def copy_fit(self, model):
+        """
+        Copy warping functions and template from another AffineWarping or
+        ShiftWarping instance. Useful for warm-starting optimization.
+        """
+
+        if isinstance(model, ShiftWarping):
+            # check input
+            check_is_fitted(model, 'shifts')
+            K = len(model.shifts)
+            self.x_knots = np.tile(np.linspace(0, 1, self.n_knots+2), (K, 1))
+            self.y_knots = self.x_knots - model.fractional_shifts[:, None]
+            self.template = model.template.copy()
+
+        elif isinstance(model, AffineWarping):
+            # check input
+            check_is_fitted(model, 'x_knots')
+            if model.n_knots > self.n_knots:
+                raise ValueError(
+                    "Can't copy fit from another AffineWarping model instance "
+                    "with more interior knots."
+                )
+            # initialize knots
+            K = len(model.x_knots)
+            rx = np.random.rand(K, self.n_knots - model.n_knots)
+            self.x_knots = np.column_stack((model.x_knots, rx))
+            self.x_knots.sort(axis=1)
+            self.y_knots = np.column_stack([model.event_transform(x) for x in self.x_knots.T])
+            self.template = model.template.copy()
+
+        else:
+            raise ValueError(
+                "Expected either AffineWarping or ShiftWarping model instance."
+            )
 
     def manual_fit(self, data, t0, t1=None, recenter=True):
         """
@@ -377,8 +403,19 @@ class AffineWarping(object):
         self.loss_hist = []
         self._record_loss(data)
 
-    def _record_loss(self, data):
+    def _initialize_storage(self, n_trials):
+        """
+        Initializes arrays to hold loss per trial.
+        """
+        self._losses = np.zeros(n_trials)
+        self._penalties = np.zeros(n_trials)
+        self._new_losses = np.empty(n_trials)
+        self._new_penalties = np.empty(n_trials)
 
+    def _record_loss(self, data):
+        """
+        Computes overall objective function and appends to self.loss_hist
+        """
         # update reconstruction and evaluate loss
         self._losses.fill(0.0)
         warp_with_quadloss(self.x_knots, self.y_knots, self.template,

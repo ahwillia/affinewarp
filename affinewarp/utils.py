@@ -17,15 +17,15 @@ def check_data_tensor(data):
             if False, data is a 3d dense array.
     """
 
+    # add extra dimension if necessary
+    if isinstance(data, (sparse.COO, np.ndarray)) and data.ndim == 2:
+        data = data[:, :, None]
+
     # check if data is a valid spike data format
     if is_spike_data(data):
         return data, True
 
-    # otherwise try interpreting as a dense array
-    if isinstance(data, np.ndarray) and data.ndim == 2:
-        data = data[:, :, None]
-
-    # check that data is now in an appropriate format
+    # otherwise, try interpreting as a dense array
     if (
         not isinstance(data, np.ndarray) or
         data.ndim != 3 or

@@ -11,7 +11,7 @@ import sparse
 class ShiftWarping(object):
     """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, maxlag=.2, warpreg=0, l2_smoothness=0):
+    def __init__(self, maxlag=.5, warpreg=0, l2_smoothness=0):
         """
         Params
         ------
@@ -23,13 +23,15 @@ class ShiftWarping(object):
             strength of roughness penalty on the template
         """
 
-        # data dimensions
+        if (maxlag < 0) or (maxlag > .5):
+            raise ValueError('Value of maxlag must be between 0 and 0.5')
+
         self.maxlag = maxlag
         self.loss_hist = []
         self.warpreg = warpreg
         self.l2_smoothness = l2_smoothness
 
-    def fit(self, data, iterations=10, verbose=True):
+    def fit(self, data, iterations=10, verbose=True, warp_iterations=None):
         """Fit shift warping to data.
         """
 

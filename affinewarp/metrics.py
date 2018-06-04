@@ -1,12 +1,42 @@
 import numpy as np
+from numbers import Integral
+from .spikedata import bin_spikes
 
 
-def calc_snr(binned):
-    """Signal-to-noise ratio
-    """
-    m = binned.mean(axis=0)
-    s = binned.std(axis=0)
-    return np.ptp(m, axis=0) / np.max(s, axis=0)
+def mean_noise_var(data, bins):
+
+    if isinstance(bins, Integral):
+        bins = np.asarray([bins])
+    else:
+        bins = np.asarray(bins)
+
+    if not np.issubdtype(bins.dtype, np.integer):
+        raise ValueError('bins must be specified as integer')
+
+    result = []
+    for b in bins:
+        binned = bin_spikes(data, b)
+        result.append(binned.var(axis=0).mean(axis=0))
+    return np.array(result)
+
+
+def calc_snr(data, bins):
+
+    if isinstance(bins, Integral):
+        bins = np.asarray([bins])
+    else:
+        bins = np.asarray(bins)
+
+    if not np.issubdtype(bins.dtype, np.integer):
+        raise ValueError('bins must be specified as integer')
+
+    result = []
+    for b in bins:
+        binned = bin_spikes(data, b)
+        m = binned.mean(axis=0)
+        s = binned.std(axis=0)
+        result.append(np.ptp(m, axis=0) / np.max(s, axis=0))
+    return np.array(result)
 
 
 def participation(M):
