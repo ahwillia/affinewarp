@@ -4,7 +4,7 @@ from affinewarp.shiftwarp import _fill_WtW
 
 def test_WtW():
 
-    # test that correct number of counts
+    # test WtW has correct number of counts
     K, T = 100, 101
     shifts = np.random.randint(-25, 26, size=K)
     WtW = np.zeros(T)

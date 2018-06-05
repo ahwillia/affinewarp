@@ -1,6 +1,18 @@
 import numpy as np
-from affinewarp.interp import warp_penalties
+from affinewarp.piecewise import warp_penalties
+from affinewarp import AffineWarping
 from numpy.testing import assert_allclose
+
+
+def test_monotonic_knots():
+    model = AffineWarping()
+    data = np.random.randn(100, 101, 102)
+    model.fit(data, iterations=1, verbose=False)
+
+    for temperature in np.logspace(-3, 3, 100):
+        x, y = model._mutate_knots(temperature)
+        assert np.all(np.diff(x, axis=1) >= 0)
+        assert np.all(np.diff(y, axis=1) >= 0)
 
 
 def test_warp_penalties():
@@ -48,4 +60,5 @@ def test_warp_penalties():
 
 
 if __name__ == '__main__':
+    test_monotonic_knots()
     test_warp_penalties()
