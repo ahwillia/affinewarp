@@ -1,8 +1,9 @@
 import numpy as np
-from affinewarp import AffineWarping
 from tqdm import trange
 import sparse
 from copy import deepcopy
+from .spikedata import bin_spikes
+from scipy.interpolate import interp1d
 
 
 def kfold(N, n_splits):
@@ -26,6 +27,9 @@ def kfold(N, n_splits):
 
 def heldout_transform(models, binned, data=None, warmstart=True, **fit_kw):
     """
+    Transform each neuron's activity by holding it out of model fitting and
+    applying warping functions fit to the remaining neurons.
+
     Parameters
     ----------
     models : iterable
@@ -37,6 +41,10 @@ def heldout_transform(models, binned, data=None, warmstart=True, **fit_kw):
     warmstart (optional) : bool
         If True, initialize warps with learned from last model fit.
     """
+
+    # make models iterable
+    if not np.iterable(models):
+        models = (models,)
 
     # broadcast keywords into dict, with model instances as keys
     fit_kw['verbose'] = False
@@ -63,7 +71,7 @@ def heldout_transform(models, binned, data=None, warmstart=True, **fit_kw):
         # define training set
         trainset = list(set(range(n_neurons)) - {n})
 
-        # fit model and save parameters
+        # fit model and save transformed test set
         for i, m in enumerate(models):
             m.fit(binned[:, :, trainset], **fit_kw[m])
 
@@ -76,90 +84,28 @@ def heldout_transform(models, binned, data=None, warmstart=True, **fit_kw):
     else:
         aligned_data = [np.concatenate(a, axis=2) for a in aligned_data]
 
+    # squeeze results if a single model was provided
+    if len(aligned_data) == 1:
+        aligned_data = aligned_data[0]
+
     return aligned_data
 
 
-def hyperparam_search(data, n_models=10, frac_test_trials=.25,
-                      frac_test_neurons=.25, fit_iter=10):
+def null_dataset(data, nbins):
+    """
+    Generate Poisson random spiking pattern on each trial.
+    """
 
-    # dict holding results of search
-    results = {
-        'q1': [],
-        'q2': [],
-        'l2_smoothness': [],
-        'nbins': [],
-        'n_knots': [],
-        'train_err': [],
-        'test_err': [],
-        'train_learning_curves': [],
-        'test_learning_curves': []
-    }
+    # num trials, num timepoints, num neurons
+    K, T, N = data.shape
 
-    nk = int()
+    # trial-average estimate of firing rates
+    binlen = T / nbins  # length of each time bin
+    psth = bin_spikes(data, nbins).mean(axis=0) / binlen  # spike rate
 
-    for m in trange(n_models):
+    # interpolate binned firing rates to length of spike data
+    interp_func = interp1d(np.arange(nbins), psth, axis=0)
+    psth_interp = interp_func(np.linspace(0, nbins-1, T))
 
-        # sample model parameters
-        params = {
-            'q1': np.random.uniform(0, .5),
-            'q2': np.random.uniform(0, .5),
-            'l2_smoothness': np.random.uniform(0, 1000),
-            'nbins': np.random.randint(100, 300),
-            'n_knots': np.random.randint(0, 10)
-        }
-
-        # bin data (remove nbins temporarily)
-        binned = bin_count_data(data, params.pop('nbins'))
-        n_trials, n_neurons = binned.shape[0], binned.shape[2]
-
-        # randomly sample test neurons and trials
-        tst_k = np.random.choice(np.arange(n_trials), replace=False,
-                                 size=int(n_trials*frac_test_trials))
-        tst_n = np.random.choice(np.arange(n_neurons), replace=False,
-                                 size=int(n_neurons*frac_test_neurons))
-
-        # use remaining neurons and trials for training
-        tr_k = np.array(list(set(range(n_trials)) - set(tst_k)))
-        tr_n = np.array(list(set(range(n_neurons)) - set(tst_n)))
-        tr_k.sort()
-        tr_n.sort()
-
-        # create model instance
-        model = AffineWarping(**params)
-        model.initialize_fit(binned)
-        params['nbins'] = binned.shape[1]  # add nbins back
-
-        # save training and testing error over training
-        train_err, test_err = [], []
-
-        # fit model
-        for itr in range(fit_iter):
-            model.fit_template(trials=tr_k)
-            model.fit_warps(neurons=tr_n)
-
-            # squared residuals
-            res = (model.predict() - binned)**2
-
-            # record training and test_error
-            train_err.append(np.mean(np.concatenate(
-                (res[tr_k, :, :].ravel(), res[tst_k][:, tr_n].ravel())
-            )) ** .5)
-            test_err.append(np.mean(res[tst_k][:, tst_n]) ** .5)
-
-        # save model parameters
-        for key in params:
-            results[key].append(params[key])
-
-        # save full learning curves for train and test set
-        results['train_learning_curves'].append(train_err)
-        results['test_learning_curves'].append(test_err)
-
-        # save final training and test error across folds
-        results['train_err'].append(train_err[-1])
-        results['test_err'].append(test_err[-1])
-
-    # wrap learning curves in numpy arrays
-    for k in 'train_learning_curves', 'test_learning_curves':
-        results[k] = np.asarray(results[k])
-
-    return results
+    # draw poisson random data and package into sparse array
+    return sparse.COO(np.random.poisson(psth_interp, size=(K, T, N)))

@@ -155,55 +155,6 @@ def densewarp(X, Y, data, out):
     return out
 
 
-# TODO - think about other parameterizations (dx and dy directly)
-
-@jit(nopython=True)
-def force_monotonic_knots(X, Y):
-    K, P = X.shape
-    for k in range(K):
-
-        for p in range(P-1):
-            x0 = X[k, p]
-            y0 = Y[k, p]
-            x1 = X[k, p+1]
-            y1 = Y[k, p+1]
-            dx = X[k, p+1] - X[k, p]
-            dy = Y[k, p+1] - Y[k, p]
-
-            if (dx < 0) and (dy < 0):
-                # swap both x and y coordinates
-                tmp = X[k, p]
-                X[k, p] = X[k, p+1]
-                X[k, p+1] = tmp
-                # swap y
-                tmp = Y[k, p]
-                Y[k, p] = Y[k, p+1]
-                Y[k, p+1] = tmp
-
-            elif dx < 0:
-                # swap x coordinate
-                tmp = X[k, p]
-                X[k, p] = X[k, p+1]
-                X[k, p+1] = tmp
-                # set y coordinates to mean
-                Y[k, p] = Y[k, p] + (dy/2) - 1e-3
-                Y[k, p+1] = Y[k, p+1] - (dy/2) + 1e-3
-
-            elif dy < 0:
-                # set y coordinates to mean
-                Y[k, p] = Y[k, p] + (dy/2) - 1e-3
-                Y[k, p+1] = Y[k, p+1] - (dy/2) + 1e-3
-
-        # TODO - redistribute redundant edge knots
-        for p in range(P):
-            if X[k, p] <= 0:
-                X[k, p] = 0.0 + 1e-3*p
-            elif X[k, p] >= 1:
-                X[k, p] = 1.0 - 1e-3*(P-p-1)
-
-    return X, Y
-
-
 @jit(nopython=True)
 def warp_penalties(X, Y, penalties):
 
@@ -234,7 +185,7 @@ def warp_penalties(X, Y, penalties):
 
                 # penalty is the area of two right triangles with heights
                 # y0 and y1 and bases (x1 - x0) times location of x-intercept.
-                penalties[k] += 0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1))
+                penalties[k] += (0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1)))**2
 
             # either one of y0 or y1 is zero, or they are both positive or
             # both negative.
@@ -242,7 +193,7 @@ def warp_penalties(X, Y, penalties):
 
                 # penalty is the area of a trapezoid of with height x1 - x0,
                 # and with bases y0 and y1
-                penalties[k] += 0.5 * abs(y0 + y1) * (x1 - x0)
+                penalties[k] += (0.5 * abs(y0 + y1) * (x1 - x0))**2
 
             # update left point of line segment
             x0 = x1

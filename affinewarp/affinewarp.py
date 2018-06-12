@@ -4,8 +4,7 @@ from tqdm import trange, tqdm
 from .utils import _diff_gramian, check_data_tensor
 from sklearn.utils.validation import check_is_fitted
 from .spikedata import get_spike_coords, get_spike_shape, is_spike_data
-from .piecewise import force_monotonic_knots, warp_penalties
-from .piecewise import sparsewarp, sparsealign, densewarp
+from .piecewise import warp_penalties, sparsewarp, sparsealign, densewarp
 from .shiftwarp import ShiftWarping
 from numba import jit
 import sparse
@@ -38,14 +37,24 @@ class AffineWarping(object):
         Parameters
         ----------
         temperature : scalar
-            Standard deviation of perturbation to the knots.
+            scale of perturbation to the knots.
+
+        Returns
+        -------
+        x, y : ndarray
+            coordinates of new knots defining warping functions
         """
-        x, y = self.x_knots.copy(), self.y_knots.copy()
-        K, P = x.shape
-        y += np.random.randn(K, P) * temperature
-        if self.n_knots > 0:
-            x[:, 1:-1] += np.random.randn(K, self.n_knots) * temperature
-        return force_monotonic_knots(x, y)
+        K = len(self.x_knots)
+
+        x = self.x_knots + (np.random.randn(K, self.n_knots+2) * temperature)
+        x.sort(axis=1)
+        x = x - x[:, (0,)]
+        x = x / x[:, (-1,)]
+
+        y = self.y_knots + (np.random.randn(K, self.n_knots+2) * temperature)
+        y.sort(axis=1)
+
+        return x, y
 
     def fit(self, data, iterations=10, warp_iterations=20, fit_template=True,
             verbose=True, init_warps='identity', overwrite_loss_hist=True):
