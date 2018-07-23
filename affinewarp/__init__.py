@@ -5,4 +5,3 @@ __author__ = 'Alex Williams <ahwillia@stanford.edu>'
 
 from .affinewarp import AffineWarping
 from .shiftwarp import ShiftWarping
-from .spikedata import bin_spikes

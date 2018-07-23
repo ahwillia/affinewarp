@@ -4,6 +4,21 @@ import sparse
 from .spikedata import is_spike_data
 
 
+@jit(nopython=True)
+def min_max_1d(arr):
+    """
+    Return maximum and minimum value of a 1d array.
+    """
+    vmax = arr[0]
+    vmin = arr[0]
+    for i in range(1, len(arr)):
+        if arr[i] > vmax:
+            vmax = arr[i]
+        elif arr[i] < vmin:
+            vmin = arr[i]
+    return vmin, vmax
+
+
 def check_data_tensor(data):
     """
     Check if input is in an appropriate data format
@@ -43,7 +58,7 @@ def check_data_tensor(data):
     return data, False
 
 
-def _diff_gramian(T, lam):
+def _diff_gramian(T, smoothness_scale, l2_scale):
     DtD = np.ones((3, T))
 
     DtD[-1] = 6.0
@@ -56,4 +71,7 @@ def _diff_gramian(T, lam):
     DtD[-2, 1] = -2.0
     DtD[-2, -1] = -2.0
 
-    return DtD * lam
+    DtD *= smoothness_scale
+    DtD[-1] += l2_scale
+
+    return DtD
