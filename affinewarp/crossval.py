@@ -1,3 +1,5 @@
+"""Validation methods for time warping models."""
+
 import numpy as np
 from tqdm import trange
 import sparse

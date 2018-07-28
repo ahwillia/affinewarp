@@ -3,9 +3,10 @@ from numba import jit
 from tqdm import trange
 import scipy as sci
 from sklearn.utils.validation import check_is_fitted
-from .spikedata import is_spike_data, get_spike_shape, get_spike_coords
+from copy import deepcopy
+
+from .spikedata import SpikeData
 from .utils import _diff_gramian, check_data_tensor
-import sparse
 
 
 class ShiftWarping(object):
@@ -53,6 +54,10 @@ class ShiftWarping(object):
         """
         Fit shift warping to data.
         """
+
+        # TODO - support this?
+        if isinstance(data, SpikeData):
+            raise NotImplementedError()
 
         # data dimensions:
         #   K = number of trials
@@ -110,6 +115,7 @@ class ShiftWarping(object):
 
             self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
+        # compute shifts as a fraction of trial length
         self.fractional_shifts = self.shifts / T
 
     def argsort_warps(self):
@@ -121,7 +127,7 @@ class ShiftWarping(object):
 
     def predict(self):
         """
-        Returns model prediction on each trial.
+        Returns model prediction (warped version of template on each trial).
         """
         check_is_fitted(self, 'shifts')
 
@@ -135,18 +141,16 @@ class ShiftWarping(object):
         return pred
 
     def transform(self, data):
+        """
+        Applies inverse warping functions to align raw data across trials.
+        """
         check_is_fitted(self, 'shifts')
         data, is_spikes = check_data_tensor(data)
 
+        # For SpikeData objects
         if is_spikes:
-            # indices of sparse entries
-            shape = get_spike_shape(data)
-            trials, times, neurons = get_spike_coords(data)
-            T = shape[1]
-            wtimes = (((times/T) - self.fractional_shifts[trials])*T).astype(int)
-            i = (wtimes > 0) & (wtimes < T)
-            return sparse.COO([trials[i], wtimes[i], neurons[i]],
-                              data=np.ones(i.sum()), shape=shape)
+            d = deepcopy(data)
+            return d.shift_each_trial_by_fraction(self.fractional_shifts)
 
         else:
             # warp dense data

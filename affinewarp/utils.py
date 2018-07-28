@@ -1,64 +1,49 @@
 import numpy as np
-from numba import jit
-import sparse
-from .spikedata import is_spike_data
-
-
-@jit(nopython=True)
-def min_max_1d(arr):
-    """
-    Return maximum and minimum value of a 1d array.
-    """
-    vmax = arr[0]
-    vmin = arr[0]
-    for i in range(1, len(arr)):
-        if arr[i] > vmax:
-            vmax = arr[i]
-        elif arr[i] < vmin:
-            vmin = arr[i]
-    return vmin, vmax
+from .spikedata import SpikeData
 
 
 def check_data_tensor(data):
     """
-    Check if input is in an appropriate data format
+    Check if input is either SpikeData or ndarray.
+
+    Parameters
+    ----
+    arr : ndarray or SpikeData instance
+        input data array
 
     Returns
     -------
-        arr : ndarray or spike data format
-            reformatted data array
-        is_spikes : bool
-            if True, data is in spiking format.
-            if False, data is a 3d dense array.
+    arr : ndarray or SpikeData instance
+        Data array, if input was a 2d numpy array an extra axis is appended
+        to the end.
+    is_spikes : bool
+        if True, data is in spiking format.
+        if False, data is a 3d dense array.
     """
 
-    # add extra dimension if necessary
-    if isinstance(data, (sparse.COO, np.ndarray)) and data.ndim == 2:
-        data = data[:, :, None]
+    # Data provided as a dense numpy array.
+    if isinstance(data, np.ndarray) and data.ndim == 3:
+        return data, False
 
-    # check if data is a valid spike data format
-    if is_spike_data(data):
+    # Dense numpy array with 2-dimensions is okay. In this case, add an extra
+    # dimension/axis (single-neuron dataset).
+    elif isinstance(data, np.ndarray) and data.ndim == 2:
+        return data[:, :, None], False
+
+    # Spiking data format
+    elif isinstance(data, SpikeData):
         return data, True
 
-    # otherwise, try interpreting as a dense array
-    if (
-        not isinstance(data, np.ndarray) or
-        data.ndim != 3 or
-        not np.issubdtype(data.dtype, np.number)
-    ):
-        raise ValueError(
-            "Data input should be formatted as a 3d numpy array (trials x "
-            "times x neurons) or a spike data format. Accepted spike data "
-            "formats include sparse 3d arrays (trials x times x neurons) in "
-            "COO format or a tuple of three, 1d arrays holding integer "
-            "indices corresponding to trial number, spike time, neuron id (in "
-            "that order)."
-        )
-
-    return data, False
+    # Data format not recognized
+    else:
+        raise ValueError("Data input should be formatted as a 3d numpy "
+                         "array (trials x times x neurons) or as a "
+                         "SpikeData instance.")
 
 
 def _diff_gramian(T, smoothness_scale, l2_scale):
+    """Constructs regularization gramian in least-squares problem.
+    """
     DtD = np.ones((3, T))
 
     DtD[-1] = 6.0
