@@ -1,16 +1,47 @@
+"""Common metrics for evaluating across-trial variability."""
+
 import numpy as np
 from numbers import Integral
-from .spikedata import bin_spikes
-from .utils import check_data_tensor
 
 
 def snr(data, nbins=None):
     """
     Signal-to-Noise Ratio (SNR) for each neuron.
+
+    For each neuron, the SNR across trials is defined as the largest deviation
+    from the mean firing rate ("the signal") divided by the maximum standard
+    deviation of any timebin across trials ("the noise"). Note that this metric
+    may be sensitive to the size of the time bins.
+
+    Parameters
+    ----------
+    data: SpikeData or ndarray
+        Multi-trial dataset. If provided as a SpikeData instance, the spike
+        counts are binned before computing the SNR. If provided as an ndarray,
+        then the input is interpreted as binned spike counts.
+    nbins: int (optional)
+        If 'data' is a SpikeData object, then 'nbins' must be provided
+        in order to compute PSTH.
+
+    Returns
+    -------
+    snr: ndarray of floats
+        SNR for each neuron.
     """
-    binned = _bin_data(data, nbins)
+    if isinstance(data, SpikeData) and nbins is None:
+        raise ValueError("'nbins' must also be specified if data is in "
+                         "SpikeData format.")
+    elif isinstance(data, SpikeData):
+        binned = data.bin_spikes(data, nbins)
+    elif isinstance(data, np.ndarray) and data.ndim == 3:
+        binned = data
+    else:
+        raise ValueError("'data' must be a SpikeData instance or a 3d "
+                         "numpy array of binned spike counts with shape"
+                         "(trials x timebins x neurons).")
+
     m = binned.mean(axis=0)
-    signal = np.abs(m - m.mean(0)).max(0)
+    signal = np.abs(m - m.mean(0)).max(axis=0)
     noise = np.max(binned.std(axis=0), axis=0)
     return signal / noise
 
@@ -37,24 +68,3 @@ def r_squared(data, nbins=None):
     ss_model = np.sum(resid ** 2, axis=(0, 1))
     # return explained variance
     return 1 - ss_model / ss_data
-
-
-def _bin_data(data, nbins):
-
-    # check input
-    data, is_spikes = check_data_tensor(data)
-
-    # if spiking data is provided, bin spike times
-    if is_spikes and nbins is None:
-        raise ValueError(
-            'If data is provided in a spike data format, number of bins '
-            '(`nbins`) must be specified.'
-        )
-
-    # bin spikes and return
-    elif is_spikes:
-        return bin_spikes(data, nbins)
-
-    # data is in dense array format, return it as is.
-    else:
-        return data

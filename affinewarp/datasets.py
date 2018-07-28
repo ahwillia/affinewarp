@@ -1,8 +1,12 @@
-"""
-Simple datasets for testing functionality.
-"""
+"""Simple datasets for testing functionality."""
 
 import numpy as np
+
+
+# TODO(poolio)
+# ------------
+# Add function that generates spikes from piecewise linear time warped process.
+# Could also just generate binned spike counts.
 
 
 def jittered_data(t=None, feature=None, n_trial=61, jitter=1, gain=0,

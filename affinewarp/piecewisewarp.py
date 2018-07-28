@@ -766,7 +766,7 @@ def warp_penalties(X, Y, penalties):
 
                 # penalty is the area of two right triangles with heights
                 # y0 and y1 and bases (x1 - x0) times location of x-intercept.
-                penalties[k] += (0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1)))**2
+                penalties[k] += 0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1))
 
             # either one of y0 or y1 is zero, or they are both positive or
             # both negative.
@@ -774,7 +774,7 @@ def warp_penalties(X, Y, penalties):
 
                 # penalty is the area of a trapezoid of with height x1 - x0,
                 # and with bases y0 and y1
-                penalties[k] += (0.5 * abs(y0 + y1) * (x1 - x0))**2
+                penalties[k] += 0.5 * abs(y0 + y1) * (x1 - x0)
 
             # update left point of line segment
             x0 = x1

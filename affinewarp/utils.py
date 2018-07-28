@@ -1,3 +1,4 @@
+import numba
 import numpy as np
 from .spikedata import SpikeData
 
