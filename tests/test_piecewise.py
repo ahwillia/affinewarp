@@ -1,11 +1,11 @@
 import numpy as np
-from affinewarp.piecewise import warp_penalties
-from affinewarp import AffineWarping
-from numpy.testing import assert_allclose
+from affinewarp.piecewisewarp import warp_penalties
+from affinewarp import PiecewiseWarping, SpikeData
+from numpy.testing import assert_allclose, assert_array_equal
 
 
 def test_monotonic_knots():
-    model = AffineWarping()
+    model = PiecewiseWarping()
     data = np.random.randn(100, 101, 102)
     model.fit(data, iterations=1, verbose=False)
 
@@ -59,6 +59,24 @@ def test_warp_penalties():
         assert_allclose(actual, expected, atol=1e-8)
 
 
+def test_identity_transform():
+
+    # dense data
+    model = PiecewiseWarping()
+    binned = np.random.randn(10, 11, 12)
+    model.fit(binned, iterations=0, verbose=False)
+    assert_array_equal(binned, model.transform(binned))
+
+    # sparse data
+    k, t, n = np.where(np.random.randn(10, 11, 12) > 1.5)
+    spikedata = SpikeData(k, t, n, tmin=0, tmax=12)
+    warped = model.transform(spikedata)
+    assert_array_equal(spikedata.trials, warped.trials)
+    assert_array_equal(spikedata.spiketimes, warped.spiketimes)
+    assert_array_equal(spikedata.neurons, warped.neurons)
+
+
 if __name__ == '__main__':
     test_monotonic_knots()
     test_warp_penalties()
+    test_identity_transform()
