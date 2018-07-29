@@ -234,25 +234,35 @@ class SpikeData(object):
         """
         Filter out trials by integer id.
         """
+        if not np.iterable(kept_trials):
+            kept_trials = (kept_trials,)
+        kept_trials = np.asarray(kept_trials)
         if kept_trials.dtype == bool:
             kept_trials = np.where(kept_trials)[0]
         elif not is_sorted(kept_trials):
             raise ValueError("kept_trials must be sorted.")
-
         result = self.copy() if copy else self
         result._filter(result.trials, kept_trials)
         result.sort_spikes()
         result.n_trials = result.trials[-1] + 1
         return result
 
-    # def select_neurons(self, kept_neurons, copy=True, rename_indices=True):
-    #     """
-    #     Filter out neurons by integer id.
-    #     """
-    #     result = self.copy() if copy else self
-    #     result._filter(result.neurons, kept_neurons, rename_indices)
-    #     result.n_neurons = result.neurons.max()
-    #     return result
+    def select_neurons(self, kept_neurons, copy=True):
+        """
+        Filter out neurons by integer id.
+        """
+        if not np.iterable(kept_neurons):
+            kept_neurons = (kept_neurons,)
+        kept_neurons = np.asarray(kept_neurons)
+        if kept_neurons.dtype == bool:
+            kept_neurons = np.where(kept_neurons)[0]
+        elif not is_sorted(kept_neurons):
+            raise ValueError("kept_neurons must be sorted.")
+        result = self.copy() if copy else self
+        result._filter(result.neurons, kept_neurons)
+        result.sort_spikes()
+        result.n_neurons = result.neurons.max() + 1
+        return result
 
     def add_trial(self, new_times, new_neurons):
         """
@@ -328,7 +338,7 @@ def _fast_bin(counts, trials, bins, neurons):
         counts[i, j, k] += 1
 
 
-# @numba.jit(nopython=True)
+@numba.jit(nopython=True)
 def _reindex(arr, arr_map):
     """
     Computes re-indexing array to remap values in 'arr'.
@@ -337,7 +347,7 @@ def _reindex(arr, arr_map):
         arr[i] = arr_map[x]
 
 
-# @numba.jit(nopython=True)
+@numba.jit(nopython=True)
 def _get_filtered_indexing(arr, kept_values, idx):
     """
     Computes re-indexing array to keep only subset of values in 'arr'.
