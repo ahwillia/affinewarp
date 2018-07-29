@@ -230,29 +230,29 @@ class SpikeData(object):
         result.sort_spikes()
         return result
 
-    def select_trials(self, kept_trials, copy=True, rename_indices=True):
+    def select_trials(self, kept_trials, copy=True):
         """
         Filter out trials by integer id.
         """
+        if kept_trials.dtype == bool:
+            kept_trials = np.where(kept_trials)[0]
+        elif not is_sorted(kept_trials):
+            raise ValueError("kept_trials must be sorted.")
+
         result = self.copy() if copy else self
         result._filter(result.trials, kept_trials)
-        # rename trial ids so that they are zero-indexed, continuous integers.
-        if rename_indices:
-            result.trials = rankdata(result.trials, method='dense') - 1
-        result.n_trials = result.trials[-1]
+        result.sort_spikes()
+        result.n_trials = result.trials[-1] + 1
         return result
 
-    def select_neurons(self, kept_neurons, copy=True, rename_indices=True):
-        """
-        Filter out neurons by integer id.
-        """
-        result = self.copy() if copy else self
-        result._filter(result.neurons, kept_neurons)
-        # rename neuron ids so that they are zero-indexed, continuous integers.
-        if rename_indices:
-            result.neurons = rankdata(result.neurons, method='dense') - 1
-        result.n_neurons = result.neurons.max()
-        return result
+    # def select_neurons(self, kept_neurons, copy=True, rename_indices=True):
+    #     """
+    #     Filter out neurons by integer id.
+    #     """
+    #     result = self.copy() if copy else self
+    #     result._filter(result.neurons, kept_neurons, rename_indices)
+    #     result.n_neurons = result.neurons.max()
+    #     return result
 
     def add_trial(self, new_times, new_neurons):
         """
@@ -300,10 +300,6 @@ class SpikeData(object):
         Filter out elements for generic array.
         """
         idx = np.zeros(self.n_spikes, dtype=bool)
-        if kept_values.dtype is bool:
-            kept_values = np.where(kept_values)[0]
-        elif not is_sorted(kept_values):
-            kept_values.sort()
         _get_filtered_indexing(arr, kept_values, idx)
         self.trials = self.trials[idx]
         self.spiketimes = self.spiketimes[idx]
@@ -313,7 +309,7 @@ class SpikeData(object):
         """
         Permutes the order of data so that trial ids are sorted.
         """
-        idx = np.lexsort((self.trials, self.spiketimes, self.neurons))
+        idx = np.lexsort((self.neurons, self.spiketimes, self.trials))
         self.trials = np.ascontiguousarray(self.trials[idx])
         self.spiketimes = np.ascontiguousarray(self.spiketimes[idx])
         self.neurons = np.ascontiguousarray(self.neurons[idx])
@@ -323,7 +319,7 @@ class SpikeData(object):
                           self.neurons.copy(), self.tmin, self.tmax)
 
 
-# @numba.jit(nopython=True)
+@numba.jit(nopython=True)
 def _fast_bin(counts, trials, bins, neurons):
     """
     Given coordinates of spikes, compile binned spike counts.
@@ -332,7 +328,7 @@ def _fast_bin(counts, trials, bins, neurons):
         counts[i, j, k] += 1
 
 
-@numba.jit(nopython=True)
+# @numba.jit(nopython=True)
 def _reindex(arr, arr_map):
     """
     Computes re-indexing array to remap values in 'arr'.
@@ -341,13 +337,14 @@ def _reindex(arr, arr_map):
         arr[i] = arr_map[x]
 
 
-@numba.jit(nopython=True)
+# @numba.jit(nopython=True)
 def _get_filtered_indexing(arr, kept_values, idx):
     """
     Computes re-indexing array to keep only subset of values in 'arr'.
     """
     for i, x in enumerate(arr):
-        if binary_search(kept_values, x) > 0:
+        arr[i] = binary_search(kept_values, x)
+        if arr[i] >= 0:
             idx[i] = True
 
 
@@ -389,7 +386,6 @@ def binary_search(arr, item):
         else:
             i = mid + 1
     return -1
-
 
 
 @numba.jit(nopython=True)
