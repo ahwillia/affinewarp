@@ -1,15 +1,34 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter1d
-from tqdm import trange
-from sklearn.decomposition import TruncatedSVD
-from .spikedata import get_spike_coords, bin_spikes
 
 
 def rasters(data, subplots=(5, 6), fig=None, axes=None, figsize=(9*1.5, 5*1.5),
             max_spikes=7000, style='black', **scatter_kw):
+    """
+    Plots a series of spike raster plots.
 
-    trials, times, neurons = get_spike_coords(data)
+    Parameters
+    ----------
+    data : SpikeData instance
+        Multi-trial spike data.
+    subplots : tuple
+        2-element tuple specifying number of rows and columns of subplots.
+    fig : Maplotlib Figure or None
+        Figure used for plotting.
+    axes : ndarray of Axes objects or None
+        Axes used for plotting.
+    figsize : tuple
+        Dimensions of figure size.
+    max_spikes : int
+        Maximum number of spikes to plot on a raster. Spikes are randomly
+        subsampled above this limit.
+    style : string
+        Either ('black' or 'white') specifying background color.
+    **scatter_kw
+        Additional keyword args are passed to matplotlib.pyplot.scatter
+    """
+
+    trials, times, neurons = data.trials, data.spiketimes, data.neurons
 
     background = 'k' if style == 'black' else 'w'
     foreground = 'w' if style == 'black' else 'k'
@@ -52,6 +71,7 @@ def rasters(data, subplots=(5, 6), fig=None, axes=None, figsize=(9*1.5, 5*1.5),
         ax.set_facecolor(background)
         ax.set_xticks([])
         ax.set_yticks([])
+        ax.set_xlim([data.tmin, data.tmax])
         for spine in ax.spines.values():
             spine.set_visible(False)
 
@@ -82,44 +102,5 @@ def binned_heatmap(binned, subplots=(5, 6), figsize=(9*1.5, 5*1.5), **kwargs):
 
     fig.tight_layout()
     fig.patch.set_facecolor('k')
-
-    return fig, axes
-
-
-def stacked_raster_psth(raw, aligned, nplots=6, figsize=(9*1.5, 5*1.5),
-                        height_ratio=.5, nbins=100, **raster_kw):
-
-    fig, axes = plt.subplots(3, nplots, figsize=figsize,
-                             gridspec_kw={
-                             'height_ratios': [1, 1, height_ratio]
-                             })
-
-    rasters(raw, axes=axes[0], fig=fig, **raster_kw)
-    rasters(aligned, axes=axes[1], fig=fig, **raster_kw)
-
-    binned_raw = bin_spikes(raw, nbins)
-    binned_align = bin_spikes(aligned, nbins)
-
-    raw_m = binned_raw.mean(axis=0)
-    raw_sd = binned_raw.std(axis=0) / np.sqrt(raw.shape[0])
-    align_m = binned_align.mean(axis=0)
-    align_sd = binned_align.std(axis=0) / np.sqrt(aligned.shape[0])
-    x = np.arange(len(raw_m))
-
-    for n, ax in enumerate(axes[-1]):
-        ax.plot(x, raw_m[:, n], color='k')
-        ax.plot(x, align_m[:, n], color='r')
-
-        ax.fill_between(x,
-                        raw_m[:, n] + raw_sd[:, n],
-                        raw_m[:, n] - raw_sd[:, n],
-                        color='k', alpha=.3, zorder=-1)
-
-        ax.fill_between(x,
-                        align_m[:, n] + align_sd[:, n],
-                        align_m[:, n] - align_sd[:, n],
-                        color='r', alpha=.3, zorder=-1)
-
-    fig.tight_layout()
 
     return fig, axes

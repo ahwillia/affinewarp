@@ -1,29 +1,61 @@
+"""Defines core functionality of Piecewise Linear Time Warping models."""
+
 import numpy as np
 import scipy as sci
-from tqdm import trange, tqdm
-from .utils import _diff_gramian, check_data_tensor
-from sklearn.utils.validation import check_is_fitted
-from .spikedata import get_spike_coords, get_spike_shape, is_spike_data
-from .piecewise import warp_penalties, sparsewarp, sparsealign, densewarp
-from .shiftwarp import ShiftWarping
 from numba import jit
-import sparse
+from tqdm import trange, tqdm
+from sklearn.utils.validation import check_is_fitted
+
+from .spikedata import SpikeData
+from .shiftwarp import ShiftWarping
+from .utils import _diff_gramian, check_data_tensor
 
 
-class AffineWarping(object):
+class PiecewiseWarping(object):
     """Piecewise Affine Time Warping applied to an analog (dense) time series.
+
+    Attributes
+    ----------
+    template : ndarray
+        Time series average under piecewise linear warping.
+    x_knots : ndarray
+        Horizontal coordinates of warping functions.
+    y_knots : ndarray
+        Vertical coordinates of warping functions.
+    loss_hist : list
+        History of objective function over optimization.
     """
-    def __init__(self, n_knots=0, warpreg=0, l2_smoothness=0,
-                 min_temp=-2, max_temp=-1):
+
+    def __init__(self, n_knots=0, warp_reg_scale=0, smoothness_reg_scale=0,
+                 l2_reg_scale=1e-4, min_temp=-2, max_temp=-1):
+        """
+        Parameters
+        ----------
+        n_knots : int
+            Nonnegative number specifying number of pieces in the piecewise
+            warping function.
+        warp_reg_scale : int or float
+            Penalty strength on distance of warping functions to identity line.
+        smoothness_reg_scale : int or float
+            Penalty strength on L2 norm of second temporal derivatives of the
+            warping templates.
+        l2_reg_scale : int or float
+            Penalty strength on L2 norm of the warping template.
+        min_temp : int or float
+            Smallest mutation rate for evolutionary optimization of warps.
+        max_temp : int or float
+            Largest mutation rate for evolutionary optimization of warps.
+        """
 
         # check inputs
-        if n_knots < 0:
-            raise ValueError('Number of knots must be nonnegative.')
+        if n_knots < 0 or not isinstance(n_knots, int):
+            raise ValueError('Number of knots must be nonnegative integer.')
 
         # model options
         self.n_knots = n_knots
-        self.warpreg = warpreg
-        self.l2_smoothness = l2_smoothness
+        self.warp_reg_scale = warp_reg_scale
+        self.smoothness_reg_scale = smoothness_reg_scale
+        self.l2_reg_scale = l2_reg_scale
         self.min_temp = min_temp
         self.max_temp = max_temp
         self.loss_hist = []
@@ -37,12 +69,12 @@ class AffineWarping(object):
         Parameters
         ----------
         temperature : scalar
-            scale of perturbation to the knots.
+            Scale of perturbation to the knots.
 
         Returns
         -------
         x, y : ndarray
-            coordinates of new knots defining warping functions
+            Coordinates of new candidate knots defining warping functions.
         """
         K = len(self.x_knots)
 
@@ -73,7 +105,7 @@ class AffineWarping(object):
             whether to display progressbar while fitting (default: True)
         """
 
-        # initialize warping functions
+        # Initialize warping functions.
         if init_warps == 'identity':
             self.x_knots = np.tile(
                 np.linspace(0, 1, self.n_knots+2),
@@ -81,79 +113,75 @@ class AffineWarping(object):
             )
             self.y_knots = self.x_knots.copy()
 
-        elif isinstance(init_warps, (AffineWarping, ShiftWarping)):
+        # If 'init_warps' is another warping model, copy the warps from that
+        # model.
+        elif isinstance(init_warps, (PiecewiseWarping, ShiftWarping)):
             self.copy_fit(init_warps)
 
-        # initialization procedure not recognized, check if warps already
-        # exist and use them if possible.
-        if not hasattr(self, 'x_knots'):
-            raise ValueError('Tried to fit model without initializing warps.')
+        # Check that warps are intialized. If 'init_warps' was not recognized
+        # and the warps were not already defined, then raise an exception.
+        check_is_fitted(self, ('x_knots', 'y_knots'))
 
-        # check if warps exist but don't match data dimensions.
+        # Check if warps exist but don't match data dimensions.
         if self.x_knots.shape[0] != data.shape[0]:
             raise ValueError(
                 'Initial warping functions must equal the number of trials.'
             )
 
-        # check data dimensions as input
+        # Check input data is provided as a dense array (binned spikes).
         data, is_spikes = check_data_tensor(data)
-
-        # check if dense array
         if is_spikes:
             raise ValueError("'data' must be provided as a dense numpy array "
                              "(neurons x timepoints x trials) holding binned "
                              "spike data.")
 
-        # set up storage for loss
+        # Allocate storage for loss.
         K, T, N = data.shape
         self._initialize_storage(K)
         if overwrite_loss_hist:
             self.loss_hist = []
 
-        # progress bar
+        # Fit model. Alternate between fitting the template and the warping
+        # functions.
         pbar = trange(iterations) if verbose else range(iterations)
-
-        # fit model
         for it in pbar:
-
-            # update template, user has option to only fit warps
             self._fit_template(data)
-
-            # update warping functions
             self._fit_warps(data, warp_iterations)
-
-            # compute and save loss function over training
             self._record_loss(data)
 
     def _fit_warps(self, data, iterations=20):
-        """
-        Fit warping functions by local random search. Typically, users should
-        call either AffineWarping.fit(...) or AffineWarping.continue_fit(...)
-        instead of this function.
+        """Fit warping functions by local random search.
+
+        Parameters
+        ----------
+        data : ndarray
+            3d array (trials x times x features) holding time series to be fit.
+        iterations : int
+            Number of iterations to optimize warps.
         """
 
-        # decay temperature within each epoch
+        # Decay temperature within each epoch.
         temperatures = np.logspace(self.min_temp, self.max_temp, iterations)
 
-        # fit warps
+        # Fit warps.
         for temp in reversed(temperatures):
 
-            # randomly sample warping functions
+            # Randomly sample warping functions.
             X, Y = self._mutate_knots(temp)
 
-            # recompute warping penalty
-            if self.warpreg > 0:
+            # Recompute warping penalty.
+            if self.warp_reg_scale > 0:
                 warp_penalties(X, Y, self._new_penalties)
-                self._new_penalties *= self.warpreg
+                self._new_penalties *= self.warp_reg_scale
                 np.copyto(self._new_losses, self._new_penalties)
             else:
                 self._new_losses.fill(0.0)
 
-            # evaluate loss of new warps
+            # Evaluate loss of new warps.
             warp_with_quadloss(X, Y, self.template, self._new_losses,
                                self._losses, data)
 
-            # update warping parameters for trials with improved loss
+            # Update warping parameters for trials with improved loss.
             idx = self._new_losses < self._losses
             self._losses[idx] = self._new_losses[idx]
             self._penalties[idx] = self._new_penalties[idx]
@@ -161,29 +189,28 @@ class AffineWarping(object):
             self.y_knots[idx] = Y[idx]
 
     def _fit_template(self, data):
-        """
-        Fit warping template by least squares. Typically, users should
-        call either AffineWarping.fit(...) or AffineWarping.continue_fit(...)
-        instead of this function.
+        """Fit warping template.
+
+        Parameters
+        ----------
+        data : ndarray
+            3d array (trials x times x features) holding time series to be fit.
         """
         K = data.shape[0]
         T = data.shape[1]
-        N = data.shape[2]
 
-        if self.l2_smoothness > 0:
-            # coefficent matrix for the template update reduce to a
-            # banded matrix with 5 diagonals.
-            WtW = _diff_gramian(T, self.l2_smoothness * K)
+        # Initialize gramians based on regularization.
+        if self.smoothness_reg_scale > 0:
+            WtW = _diff_gramian(
+                T, self.smoothness_reg_scale * K, self.l2_reg_scale)
         else:
-            # coefficent matrix for the template update reduce to a
-            # banded matrix with 3 diagonals.
             WtW = np.zeros((2, T))
 
         # Compute gramians.
         WtX = np.zeros((T, data.shape[-1]))
         _fast_template_grams(WtW[-2:], WtX, data, self.x_knots, self.y_knots)
 
-        # solve WtW * template = WtX
+        # Solve WtW * template = WtX
         self.template = sci.linalg.solveh_banded(WtW, WtX)
 
         return self.template
@@ -208,7 +235,8 @@ class AffineWarping(object):
                          self.template[None, :, :], result)
 
     def argsort_warps(self, t=0.5):
-        """Sort trial indices by their warping functions.
+        """
+        Sort trial indices by their warping functions.
 
         Parameters
         ----------
@@ -231,7 +259,7 @@ class AffineWarping(object):
                        np.full(K, t), np.empty(K))
         return np.argsort(y)
 
-    def transform(self, X, return_array=True):
+    def transform(self, X):
         """
         Apply inverse warping functions to dense or spike data.
         """
@@ -241,35 +269,19 @@ class AffineWarping(object):
         # check that X is an appropriate tensor format
         X, is_spikes = check_data_tensor(X)
 
-        # get data dimensions
-        shape = get_spike_shape(X)
-
         # check that first axis of X matches n_trials
-        if shape[0] != len(self.x_knots):
+        if X.shape[0] != len(self.x_knots):
             raise ValueError('Number of trials in the input does not match '
                              'the number of trials in the fitted model.')
 
-        # length of time axis undergoing warping
-        T = shape[1]
-
         # sparse array transform
         if is_spikes:
-
-            # indices of sparse entries
-            trials, times, neurons = get_spike_coords(X)
-
             # find warped time
-            w = sparsealign(self.x_knots, self.y_knots, trials, times / T)
-
-            if return_array:
-                # throw away out of bounds spikes
-                wtimes = (w * T).astype(int)
-                i = (wtimes < T) & (wtimes >= 0)
-                return sparse.COO([trials[i], wtimes[i], neurons[i]],
-                                  data=np.ones(i.sum()), shape=shape)
-            else:
-                # return coordinates
-                return (trials, w * T, neurons)
+            # TODO(ahwillia): replace with sparsewarp
+            w = sparsealign(self.x_knots, self.y_knots,
+                            X.trials, X.fractional_spiketimes)
+            wt = w * (X.tmax - X.tmin) + X.tmin
+            return SpikeData(X.trials, wt, X.neurons, X.tmin, X.tmax)
 
         # dense array transform
         else:
@@ -293,12 +305,13 @@ class AffineWarping(object):
                              'the number of trials in the fitted model.')
 
         trials = np.arange(times.shape[0])
+        # TODO(ahwillia): replace with sparsewarp
         wtimes = sparsealign(self.x_knots, self.y_knots, trials, times)
         return wtimes
 
     def copy_fit(self, model):
         """
-        Copy warping functions and template from another AffineWarping or
+        Copy warping functions and template from another PiecewiseWarping or
         ShiftWarping instance. Useful for warm-starting optimization.
         """
 
@@ -310,12 +323,12 @@ class AffineWarping(object):
             self.y_knots = self.x_knots - model.fractional_shifts[:, None]
             self.template = model.template.copy()
 
-        elif isinstance(model, AffineWarping):
+        elif isinstance(model, PiecewiseWarping):
             # check input
             check_is_fitted(model, 'x_knots')
             if model.n_knots > self.n_knots:
                 raise ValueError(
-                    "Can't copy fit from another AffineWarping model instance "
+                    "Can't copy fit from another PiecewiseWarping model instance "
                     "with more interior knots."
                 )
             # initialize knots
@@ -328,7 +341,7 @@ class AffineWarping(object):
 
         else:
             raise ValueError(
-                "Expected either AffineWarping or ShiftWarping model instance."
+                "Expected either PiecewiseWarping or ShiftWarping model instance."
             )
 
     def manual_fit(self, data, t0, t1=None, recenter=True):
@@ -431,7 +444,7 @@ class AffineWarping(object):
                            self._losses, self._losses, data, early_stop=False)
 
         # add warping penalty to losses
-        if self.warpreg > 0:
+        if self.warp_reg_scale > 0:
             self._losses += self._penalties
 
         # store objective function over time
@@ -571,3 +584,203 @@ def _interp_quad_loss(a, y1, y2, targ):
     for i in range(y1.size):
         result += (b*y1[i] + a*y2[i] - targ[i])**2
     return result
+
+
+@jit(nopython=True)
+def sparsewarp(X, Y, trials, xtst, out):
+    """
+    Implement inverse warping function at discrete test points, e.g. for
+    spike time data.
+
+    Parameters
+    ----------
+    X : x coordinates of knots for each trial (shape: n_trials x n_knots)
+    Y : y coordinates of knots for each trial (shape: n_trials x n_knots)
+    trials : int trial id for each coordinate (shape: n_trials)
+    xtst : queried x coordinate for each trial (shape: n_trials)
+
+    Note:
+        X is assumed to be sorted along axis=1
+
+    Returns
+    -------
+    ytst : interpolated y value for each x in xtst (shape: trials)
+    """
+
+    m = X.shape[0]
+    n = X.shape[1]
+
+    for i in range(m):
+
+        if xtst[i] <= 0:
+            out[i] = Y[trials[i], 0]
+
+        elif xtst[i] >= 1:
+            out[i] = Y[trials[i], -1]
+
+        else:
+            x = X[trials[i]]
+            y = Y[trials[i]]
+
+            j = 0
+            while j < (n-1) and x[j+1] < xtst[i]:
+                j += 1
+
+            slope = (y[j+1] - y[j]) / (x[j+1] - x[j])
+            out[i] = y[j] + slope*(xtst[i] - x[j])
+
+    return out
+
+
+def sparsealign(_X, _Y, trials, xtst):
+    """
+
+    Parameters
+    ----------
+    X : x coordinates of knots for each trial (shape: n_trials x n_knots)
+    Y : y coordinates of knots for each trial (shape: n_trials x n_knots)
+    trials : int trial id for each coordinate (shape: n_trials)
+    xtst : queried x coordinate for each trial (shape: n_trials)
+
+    Note:
+        X and Y are assumed to be sorted along axis=1
+
+    Returns
+    -------
+    ytst : interpolated y value for each x in xtst (shape: trials)
+    """
+    X = _X[trials]
+    Y = _Y[trials]
+
+    # allocate result
+    ytst = np.empty_like(xtst)
+
+    # for each trial (row of X) find first knot larger than test point
+    p = np.argmin(xtst[:, None] > X, axis=1)
+
+    # make sure that we never try to interpolate to the left of
+    # X[:,0] to avoid out-of-bounds error. Test points requiring
+    # extrapolation are clipped (see below).
+    np.maximum(1, p, out=p)
+
+    # indexing vector along trials (used to index with p)
+    k = np.arange(len(p))
+
+    # distance between adjacent knots
+    dx = np.diff(_X, axis=1)[trials]
+
+    # fractional distance of test points between knots
+    lam = (xtst - X[k, p-1]) / dx[k, p-1]
+
+    # linear interpolation
+    ytst = (Y[k, p-1]*(1-lam)) + (Y[k, p]*(lam))
+
+    # clip test values below X[:, 0] or above X[:, -1]
+    idx = lam > 1
+    ytst[idx] = Y[idx, -1]
+    idx = lam < 0
+    ytst[idx] = Y[idx, 0]
+
+    return ytst
+
+
+@jit(nopython=True)
+def densewarp(X, Y, data, out):
+
+    K = out.shape[0]
+    T = out.shape[1]
+    n_knots = X.shape[1]
+
+    for k in range(K):
+
+        # initialize line segement for interpolation
+        y0 = Y[k, 0]
+        x0 = X[k, 0]
+        slope = (Y[k, 1] - Y[k, 0]) / (X[k, 1] - X[k, 0])
+
+        # 'n' counts knots in piecewise affine warping function.
+        n = 1
+
+        # broadcast across trials if data has shape 1 x T x N
+        if data.shape[0] == 1:
+            kk = 0
+        else:
+            kk = k
+
+        # iterate over all time bins, stop early if loss is too high.
+        for t in range(T):
+
+            # fraction of trial complete
+            x = t / (T - 1)
+
+            # update interpolation point
+            while (n < n_knots-1) and (x > X[k, n]):
+                y0 = Y[k, n]
+                x0 = X[k, n]
+                slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
+                n += 1
+
+            # compute index in warped time
+            z = y0 + slope*(x - x0)
+
+            if z <= 0:
+                out[k, t] = data[kk, 0]
+            elif z >= 1:
+                out[k, t] = data[kk, -1]
+            else:
+                _i = z * (T-1)
+                rem = _i % 1
+                i = int(_i)
+                out[k, t] = (1-rem) * data[kk, i] + rem * data[kk, i+1]
+
+    return out
+
+
+@jit(nopython=True)
+def warp_penalties(X, Y, penalties):
+
+    # TODO: there is a possible bug if warp_reg_scale is large.  The
+    # objective function does not monotonically decrease.
+
+    K = X.shape[0]
+    J = X.shape[1]
+
+    for k in range(K):
+
+        # overwrite penalties vector
+        penalties[k] = 0
+
+        # left point of line segment
+        x0 = X[k, 0]
+        y0 = Y[k, 0]
+
+        for j in range(1, J):
+
+            # right point of line segment
+            x1 = X[k, j]
+            y1 = Y[k, j] - x1  # subtract off identity warp.
+
+            # if y0 and y1 have opposite signs
+            if ((y0 < 0) and (y1 > 0)) or ((y0 > 0) and (y1 < 0)):
+
+                # v is the location of the x-intercept expressed as a fraction.
+                # v = 1 means that y1 is zero, v = 0 means that y0 is zero
+                v = y1 / (y1 - y0)
+
+                # penalty is the area of two right triangles with heights
+                # y0 and y1 and bases (x1 - x0) times location of x-intercept.
+                penalties[k] += 0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1))
+
+            # either one of y0 or y1 is zero, or they are both positive or
+            # both negative.
+            else:
+
+                # penalty is the area of a trapezoid of with height x1 - x0,
+                # and with bases y0 and y1
+                penalties[k] += 0.5 * abs(y0 + y1) * (x1 - x0)
+
+            # update left point of line segment
+            x0 = x1
+            y0 = y1
+
+    return penalties

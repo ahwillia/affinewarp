@@ -3,24 +3,42 @@ from numba import jit
 from tqdm import trange
 import scipy as sci
 from sklearn.utils.validation import check_is_fitted
-from .spikedata import is_spike_data, get_spike_shape, get_spike_coords
+from copy import deepcopy
+
+from .spikedata import SpikeData
 from .utils import _diff_gramian, check_data_tensor
-import sparse
 
 
 class ShiftWarping(object):
-    """Represents a collection of time series, each with an affine time warp.
     """
-    def __init__(self, maxlag=.5, warpreg=0, l2_smoothness=0):
-        """
-        Params
-        ------
+    Models translations in time across a collection of multi-dimensional time
+    series. Does not model stretching or compression of time across trials.
+
+    Attributes
+    ----------
+    shifts : ndarray
+        Number of time bins shifted on each trial.
+    fractional_shifts : ndarray
+        Time shifts expressed as a fraction of trial length.
+    loss_hist : list
+        History of objective function over optimization.
+    """
+
+    def __init__(self, maxlag=.5, warp_reg_scale=0, smoothness_reg_scale=0,
+                 l2_reg_scale=1e-4):
+        """Initializes ShiftWarping object with hyperparameters.
+
+        Parameters
+        ----------
         maxlag : float
-            maximal allowable shift
-        warpreg : float
-            strength of penalty on the magnitude of the shifts
-        l2_smoothness : float
-            strength of roughness penalty on the template
+            Maximal allowable shift.
+        warp_reg_scale : float
+            Penalty strength on the magnitude of the shifts.
+        smoothness_reg_scale : int or float
+            Penalty strength on L2 norm of second temporal derivatives of the
+            warping templates.
+        l2_reg_scale : int or float
+            Penalty strength on L2 norm of the warping template.
         """
 
         if (maxlag < 0) or (maxlag > .5):
@@ -28,12 +46,18 @@ class ShiftWarping(object):
 
         self.maxlag = maxlag
         self.loss_hist = []
-        self.warpreg = warpreg
-        self.l2_smoothness = l2_smoothness
+        self.warp_reg_scale = warp_reg_scale
+        self.smoothness_reg_scale = smoothness_reg_scale
+        self.l2_reg_scale = l2_reg_scale
 
     def fit(self, data, iterations=10, verbose=True, warp_iterations=None):
-        """Fit shift warping to data.
         """
+        Fit shift warping to data.
+        """
+
+        # TODO - support this?
+        if isinstance(data, SpikeData):
+            raise NotImplementedError()
 
         # data dimensions:
         #   K = number of trials
@@ -42,9 +66,12 @@ class ShiftWarping(object):
         K, T, N = data.shape
 
         # initialize shifts
-        DtD = _diff_gramian(T, self.l2_smoothness * K)
         self.shifts = np.zeros(K, dtype=int)
         L = int(self.maxlag * T)
+
+        # compute gramian for regularization term
+        DtD = _diff_gramian(
+            T, self.smoothness_reg_scale * K, self.l2_reg_scale)
 
         # initialize template
         WtW = np.zeros((3, T))
@@ -88,33 +115,42 @@ class ShiftWarping(object):
 
             self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
+        # compute shifts as a fraction of trial length
         self.fractional_shifts = self.shifts / T
 
     def argsort_warps(self):
+        """
+        Returns an ordering of the trials based on the learned shifts.
+        """
         check_is_fitted(self, 'shifts')
         return np.argsort(self.shifts)
 
     def predict(self):
+        """
+        Returns model prediction (warped version of template on each trial).
+        """
         check_is_fitted(self, 'shifts')
+
+        # Allocate space for prediction.
         K = len(self.shifts)
         T, N = self.template.shape
         pred = np.empty((K, T, N))
+
+        # Compute prediction in JIT-compiled function.
         _predict(self.template, self.shifts, pred)
         return pred
 
     def transform(self, data):
+        """
+        Applies inverse warping functions to align raw data across trials.
+        """
         check_is_fitted(self, 'shifts')
         data, is_spikes = check_data_tensor(data)
 
+        # For SpikeData objects
         if is_spikes:
-            # indices of sparse entries
-            shape = get_spike_shape(data)
-            trials, times, neurons = get_spike_coords(data)
-            T = shape[1]
-            wtimes = (((times/T) - self.fractional_shifts[trials])*T).astype(int)
-            i = (wtimes > 0) & (wtimes < T)
-            return sparse.COO([trials[i], wtimes[i], neurons[i]],
-                              data=np.ones(i.sum()), shape=shape)
+            d = deepcopy(data)
+            return d.shift_each_trial_by_fraction(self.fractional_shifts)
 
         else:
             # warp dense data
@@ -141,6 +177,23 @@ class ShiftWarping(object):
 
 @jit(nopython=True)
 def _predict(template, shifts, out):
+    """
+    Produces model prediction. Applies shifts to template on each trial.
+
+    Parameters
+    ----------
+    template : array_like
+        Warping template, shape: (time x features)
+    shifts : array_like
+        Learned shifts on each trial, shape: (trials)
+    out : array_like
+        Storage for model prediction, shape: (trials x time x features)
+
+    Notes
+    -----
+    This private function is just-in-time compiled by numba. See
+    ShiftWarping.predict(...) wraps this function.
+    """
     K = len(shifts)
     T, N = template.shape
     for k in range(K):
