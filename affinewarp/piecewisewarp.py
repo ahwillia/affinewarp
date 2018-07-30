@@ -739,6 +739,9 @@ def densewarp(X, Y, data, out):
 @jit(nopython=True)
 def warp_penalties(X, Y, penalties):
 
+    # TODO: there is a possible bug if warp_reg_scale is large.  The
+    # objective function does not monotonically decrease.
+
     K = X.shape[0]
     J = X.shape[1]
 

@@ -53,14 +53,24 @@ class SpikeData(object):
 
         # Treat inputs as numpy arrays.
         self.trials = np.asarray(trials)
-        self.spiketimes = np.asarray(spiketimes).astype(float)
-        self.neurons = np.asarray(neurons)
+        self.spiketimes = np.asarray(spiketimes).astype(float).ravel()
+        self.neurons = np.asarray(neurons).ravel()
         self.tmin = tmin
         self.tmax = tmax
 
-        # All inputs must be 1-dimensional.
+        # All inputs must be 1-dimensional and equal length.
         if not (self.trials.ndim == self.spiketimes.ndim == self.neurons.ndim == 1):
-            raise ValueError("All inputs must be 1D arrays.")
+            raise ValueError("Expected 'trials', 'spiketimes', and 'neurons' "
+                             "to be 1-dimensional arrays. Given shapes were "
+                             "{}, {}, {}".format(self.trials.shape,
+                                                 self.spiketimes.shape,
+                                                 self.neurons.shape))
+        if not (self.trials.size == self.spiketimes.size == self.trials.size):
+            raise ValueError("Expected 'trials', 'spiketimes', and 'neurons' "
+                             "to have equal sizes. Given sizes were "
+                             "{}, {}, {}".format(self.trials.size,
+                                                 self.spiketimes.size,
+                                                 self.neurons.size))
 
         # Trial and neuron ids must be nonnegative integers.
         if not np.issubdtype(self.trials.dtype, np.integer):
@@ -121,7 +131,8 @@ class SpikeData(object):
 
     def bin_spikes(self, n_bins):
         """
-        Bins spikes into dense array.
+        Bins spikes into dense array of spike counts. Any spikes occuring
+        before self.tmin or after self.tmax are ignored.
 
         Parameters
         ----------
@@ -142,18 +153,18 @@ class SpikeData(object):
                              "saw {}".format(n_bins))
 
         # Compute bin for each spike.
-        bin_ids = (self.fractional_spiketimes * (n_bins-1) + .5).astype(int)
+        bin_ids = (self.fractional_spiketimes * (n_bins - 1e-9)).astype(int)
 
-        # Allocate space for result. If any spiketimes are outside of the
-        # interval [tmin, tmax] then increase number of time bins linearly.
-        shape = (self.n_trials, max(n_bins, bin_ids.max()+1), self.n_neurons)
-        binned = np.zeros(shape, dtype=int)
+        # Allocate space for result. Ignore any spiketimes outside of the
+        # interval [tmin, tmax].
+        shape = (self.n_trials, n_bins, self.n_neurons)
+        binned = np.zeros(shape, dtype=float)
 
         # Add up all spike counts and return result.
         _fast_bin(binned, self.trials, bin_ids, self.neurons)
         return binned
 
-    def shift_each_trial_by_fraction(self, fractional_shifts, copy=True):
+    def shift_each_trial_by_fraction(self, fractional_shifts, inplace=False):
         """
         Adds an offset to spike times on each trial.
 
@@ -169,9 +180,9 @@ class SpikeData(object):
         """
         # Convert fractional shifts to real time units before shifting.
         shifts = fractional_shifts * (self.tmax - self.tmin)
-        return self.shift_each_trial_by_constant(shifts, copy=copy)
+        return self.shift_each_trial_by_constant(shifts, inplace=inplace)
 
-    def shift_each_trial_by_constant(self, absolute_shifts, copy=True):
+    def shift_each_trial_by_constant(self, absolute_shifts, inplace=False):
         """
         Adds an offset to spike times on each trial.
 
@@ -187,19 +198,33 @@ class SpikeData(object):
         if len(absolute_shifts) != self.n_trials:
             raise ValueError('Input must match number of trials.')
 
-        if copy:
-            result = self.copy()
-        else:
+        if inplace:
             # Set fractional spike times to None, as these need to be
             # recalculated after shifting.
             self._frac_spiketimes = None
             result = self
+        else:
+            # If a copy is made then _frac_spiketimes should be reset to None.
+            result = self.copy()
 
         # Apply shifts.
         _shift_each_trial(result.trials, result.spiketimes, absolute_shifts)
         return result
 
-    def reorder_trials(self, trial_indices, copy=True):
+    def crop_spiketimes(self, new_tmin, new_tmax, inplace=False):
+        """
+        Throws away spikes that occured before or after set timepoints.
+        """
+        idx = (self.spiketimes >= new_tmin) & (self.spiketimes <= new_tmax)
+        result = self if inplace else self.copy()
+        result.trials = result.trials[idx]
+        result.spiketimes = result.spiketimes[idx]
+        result.neurons = result.neurons[idx]
+        result.tmin = new_tmin
+        result.tmax = new_tmax
+        return result
+
+    def reorder_trials(self, trial_indices, inplace=False):
         """
         Re-indexes all spikes according to trial permutation. Indexing
         semantics are the same as Numpy standard.
@@ -208,14 +233,14 @@ class SpikeData(object):
             raise ValueError('Indices must be a permutation of trials. See '
                              'SpikeData.filter_trials to select subsets of '
                              'trials.')
-        result = self.copy() if copy else self
+        result = self if inplace else self.copy()
         # argsort indices to get position/destination for reindexing
         _trialcopy = result.trials.copy()
         _reindex(result.trials, np.argsort(trial_indices))
         result.sort_spikes()
         return result
 
-    def reorder_neurons(self, neuron_indices, copy=True):
+    def reorder_neurons(self, neuron_indices, inplace=False):
         """
         Re-indexes all spikes according to neuron permutation. Indexing
         semantics are the same as Numpy standard.
@@ -224,13 +249,13 @@ class SpikeData(object):
             raise ValueError('Indices must be a permutation of neurons. See '
                              'SpikeData.filter_neurons to select subsets of '
                              'neurons.')
-        result = self.copy() if copy else self
+        result = self if inplace else self.copy()
         # argsort indices to get position/destination for reindexing
         _reindex(result.neurons, np.argsort(neuron_indices))
         result.sort_spikes()
         return result
 
-    def select_trials(self, kept_trials, copy=True):
+    def select_trials(self, kept_trials, inplace=False):
         """
         Filter out trials by integer id.
         """
@@ -241,13 +266,13 @@ class SpikeData(object):
             kept_trials = np.where(kept_trials)[0]
         elif not is_sorted(kept_trials):
             raise ValueError("kept_trials must be sorted.")
-        result = self.copy() if copy else self
+        result = self if inplace else self.copy()
         result._filter(result.trials, kept_trials)
         result.sort_spikes()
         result.n_trials = result.trials[-1] + 1
         return result
 
-    def select_neurons(self, kept_neurons, copy=True):
+    def select_neurons(self, kept_neurons, inplace=False):
         """
         Filter out neurons by integer id.
         """
@@ -258,7 +283,7 @@ class SpikeData(object):
             kept_neurons = np.where(kept_neurons)[0]
         elif not is_sorted(kept_neurons):
             raise ValueError("kept_neurons must be sorted.")
-        result = self.copy() if copy else self
+        result = self if inplace else self.copy()
         result._filter(result.neurons, kept_neurons)
         result.sort_spikes()
         result.n_neurons = result.neurons.max() + 1
@@ -335,7 +360,8 @@ def _fast_bin(counts, trials, bins, neurons):
     Given coordinates of spikes, compile binned spike counts.
     """
     for i, j, k in zip(trials, bins, neurons):
-        counts[i, j, k] += 1
+        if j >= 0 and j < counts.shape[1]:
+            counts[i, j, k] += 1
 
 
 @numba.jit(nopython=True)

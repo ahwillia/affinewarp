@@ -1,7 +1,7 @@
 """Common metrics for evaluating across-trial variability."""
 
 import numpy as np
-from numbers import Integral
+from .spikedata import SpikeData
 
 
 def snr(data, nbins=None):
@@ -32,7 +32,7 @@ def snr(data, nbins=None):
         raise ValueError("'nbins' must also be specified if data is in "
                          "SpikeData format.")
     elif isinstance(data, SpikeData):
-        binned = data.bin_spikes(data, nbins)
+        binned = data.bin_spikes(nbins)
     elif isinstance(data, np.ndarray) and data.ndim == 3:
         binned = data
     else:
