@@ -37,6 +37,9 @@ class SpikeData(object):
 
     def __init__(self, trials, spiketimes, neurons, tmin, tmax):
         """
+
+        Throws away spikes that aren't in [tmin, tmax]
+
         Parameters
         ----------
         trials : array-like
@@ -78,6 +81,13 @@ class SpikeData(object):
         if not np.issubdtype(self.neurons.dtype, np.integer):
             raise ValueError("Neuron IDs must be integers.")
 
+        # Throw away spikes that aren't in range
+        idx = (self.spiketimes >= tmin) & (self.spiketimes <= tmin)
+        self.trials = self.trials[idx]
+        self.neurons = self.neurons[idx]
+        self.spiketimes = self.spiketimes[idx]
+
+        # Find minimum and maximum indices along neurons and trials.
         min_trial, max_trial = min_max_1d(self.trials)
         if min_trial < 0:
             raise ValueError("Trial IDs can't be negative.")
