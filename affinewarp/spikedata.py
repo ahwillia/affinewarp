@@ -82,10 +82,14 @@ class SpikeData(object):
             raise ValueError("Neuron IDs must be integers.")
 
         # Throw away spikes that aren't in range
-        idx = (self.spiketimes >= tmin) & (self.spiketimes <= tmin)
+        idx = (self.spiketimes >= tmin) & (self.spiketimes <= tmax)
         self.trials = self.trials[idx]
         self.neurons = self.neurons[idx]
         self.spiketimes = self.spiketimes[idx]
+
+        # Check if we threw away all the spikes.
+        if self.trials.size == 0:
+            raise ValueError('No spiketimes within interval [tmin, tmax].')
 
         # Find minimum and maximum indices along neurons and trials.
         min_trial, max_trial = min_max_1d(self.trials)
