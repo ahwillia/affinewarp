@@ -55,9 +55,9 @@ class SpikeData(object):
         """
 
         # Treat inputs as numpy arrays.
-        self.trials = np.asarray(trials)
-        self.spiketimes = np.asarray(spiketimes).astype(float).ravel()
-        self.neurons = np.asarray(neurons).ravel()
+        self.trials = np.asarray(trials, dtype=int)
+        self.spiketimes = np.asarray(spiketimes, dtype=float).ravel()
+        self.neurons = np.asarray(neurons, dtype=int).ravel()
         self.tmin = tmin
         self.tmax = tmax
 
@@ -75,37 +75,38 @@ class SpikeData(object):
                                                  self.spiketimes.size,
                                                  self.neurons.size))
 
-        # Trial and neuron ids must be nonnegative integers.
-        if not np.issubdtype(self.trials.dtype, np.integer):
-            raise ValueError("Trial IDs must be integers.")
-        if not np.issubdtype(self.neurons.dtype, np.integer):
-            raise ValueError("Neuron IDs must be integers.")
+        # If dataset isn't empty, sort and pre-process spikes.
+        if self.trials.size > 0:
 
-        # Throw away spikes that aren't in range
-        idx = (self.spiketimes >= tmin) & (self.spiketimes <= tmax)
-        self.trials = self.trials[idx]
-        self.neurons = self.neurons[idx]
-        self.spiketimes = self.spiketimes[idx]
+            # Throw away spikes that aren't in range
+            idx = (self.spiketimes >= tmin) & (self.spiketimes <= tmax)
+            self.trials = self.trials[idx]
+            self.neurons = self.neurons[idx]
+            self.spiketimes = self.spiketimes[idx]
 
-        # Check if we threw away all the spikes.
-        if self.trials.size == 0:
-            raise ValueError('No spiketimes within interval [tmin, tmax].')
+            # Check if we threw away all the spikes.
+            if self.trials.size == 0:
+                raise ValueError('No spiketimes within interval [tmin, tmax].')
 
-        # Find minimum and maximum indices along neurons and trials.
-        min_trial, max_trial = min_max_1d(self.trials)
-        if min_trial < 0:
-            raise ValueError("Trial IDs can't be negative.")
-        min_neuron, max_neuron = min_max_1d(self.neurons)
-        if min_neuron < 0:
-            raise ValueError("Neuron IDs can't be negative.")
+            # Find minimum and maximum indices along neurons and trials.
+            min_trial, max_trial = min_max_1d(self.trials)
+            if min_trial < 0:
+                raise ValueError("Trial IDs can't be negative.")
+            min_neuron, max_neuron = min_max_1d(self.neurons)
+            if min_neuron < 0:
+                raise ValueError("Neuron IDs can't be negative.")
 
-        # Store data dimensions.
-        self.n_trials = max_trial + 1
-        self.n_neurons = max_neuron + 1
+            # Store data dimensions.
+            self.n_trials = max_trial + 1
+            self.n_neurons = max_neuron + 1
 
-        # Sort spikes by trial id. The up front cost of this computation is
-        # often worth it for faster shifting and indexing.
-        self.sort_spikes()
+            # Sort spikes by trial id. The up front cost of this computation is
+            # often worth it for faster shifting and indexing.
+            self.sort_spikes()
+
+        else:
+            self.n_trials = 0
+            self.n_neurons = 0
 
         # Stores spike times normalized between zero and one (fraction of time
         # within trial). Initialized to None and computed on demand.
@@ -167,7 +168,7 @@ class SpikeData(object):
                              "saw {}".format(n_bins))
 
         # Compute bin for each spike.
-        bin_ids = (self.fractional_spiketimes * (n_bins - 1e-9)).astype(int)
+        bin_ids = (self.fractional_spiketimes * (n_bins - 1e-9))
 
         # Allocate space for result. Ignore any spiketimes outside of the
         # interval [tmin, tmax].
@@ -331,7 +332,7 @@ class SpikeData(object):
         new_neurons = new_neurons[idx]
 
         # Concatenate spike coordinates.
-        new_trials = np.full(len(times), self.n_trials)
+        new_trials = np.full(new_times.size, self.n_trials)
         self.trials = np.concatenate((self.trials, new_trials))
         self.spiketimes = np.concatenate((self.spiketimes, new_times))
         self.neurons = np.concatenate((self.neurons, new_neurons))
@@ -367,15 +368,26 @@ class SpikeData(object):
         return type(self)(self.trials.copy(), self.spiketimes.copy(),
                           self.neurons.copy(), self.tmin, self.tmax)
 
+    def __getitem__(self, key):
+        subscripts = ('spiketimes', 'trials', 'neurons')
+        if isinstance(key, tuple):
+            return [self[k] for k in key]
+        elif key not in subscripts:
+            raise ValueError('Expected subscript to be one of '
+                             '{}'.format(subscripts))
+        else:
+            return self.__dict__[key]
+
 
 @numba.jit(nopython=True)
 def _fast_bin(counts, trials, bins, neurons):
     """
-    Given coordinates of spikes, compile binned spike counts.
+    Given coordinates of spikes, compile binned spike counts. Throw away
+    spikes that are outside of tmin and tmax.
     """
     for i, j, k in zip(trials, bins, neurons):
         if j >= 0 and j < counts.shape[1]:
-            counts[i, j, k] += 1
+            counts[i, int(j), k] += 1
 
 
 @numba.jit(nopython=True)
