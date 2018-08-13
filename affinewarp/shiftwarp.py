@@ -80,6 +80,10 @@ class ShiftWarping(object):
         _fill_WtX(data, self.shifts, WtX)
         self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
+        # penalize warps by distance from identity
+        warp_penalty = self.warp_reg_scale * \
+            np.abs(np.linspace(-L/T, L/T, 2*L+1)[None, :])
+
         # initialize learning curve
         losses = np.empty((K, 2*L+1))
         self.loss_hist = []
@@ -94,7 +98,7 @@ class ShiftWarping(object):
             losses /= (T * N)
 
             # find the best shift for each trial
-            s = np.argmin(losses, axis=1)
+            s = np.argmin(losses + warp_penalty, axis=1)
 
             self.shifts = -L + s
 
