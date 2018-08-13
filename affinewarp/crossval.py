@@ -1,30 +1,11 @@
 """Validation methods for time warping models."""
 
 import numpy as np
-from tqdm import trange
+from tqdm import tqdm
 import sparse
 from copy import deepcopy
 from .spikedata import SpikeData
-from scipy.interpolate import interp1d
-
-
-def _kfold(N, n_splits):
-    """Iterator for Kfold cross-validation
-    """
-    rng = np.random.permutation(N)
-
-    stride = N / n_splits
-    i = 0
-
-    while i < n_splits:
-        j = int(i * stride)
-        k = int((i+1) * stride)
-        test = rng[j:k]
-        train = np.array(list(set(rng) - set(test)))
-        test.sort()
-        train.sort()
-        yield train, test
-        i += 1
+from .utils import upsample
 
 
 # TODO(ahwillia)
@@ -34,74 +15,81 @@ def _kfold(N, n_splits):
 # to hold out neurons to fit warping hyperparameters.
 
 
-def heldout_transform(models, binned, data=None, warmstart=True, **fit_kw):
+def heldout_transform(model, binned, data, transformed_neurons=None, **fit_kw):
     """
     Transform each neuron's activity by holding it out of model fitting and
     applying warping functions fit to the remaining neurons.
 
     Parameters
     ----------
-    models : iterable
-        sequence of models to be fit
+    models : ShiftWarping or AffineWarping instance
+        Model to fit
     binned : numpy.ndarray
-        array holding binned spike times (trials x times x neurons)
-    data (optional) : numpy.ndarray or sparse.COO
-        Array holding data to be transformed
-    warmstart (optional) : bool
-        If True, initialize warps with learned from last model fit.
-    """
+        Array holding binned spike times (trials x num_timebins x neurons)
+    data : SpikeData instance
+        Raw spike times.
+    transformed_neurons (optional) : array-like or ``None``
+        Indices of neurons that are transformed. If None, all neurons are
+        transformed.
+    fit_kw (optional) : dict
+        Additional keyword arguments are passed to ``model.fit(...)``.
 
-    # make models iterable
-    if not np.iterable(models):
-        models = (models,)
+    Returns
+    -------
+    aligned_data : SpikeData instance
+        Transformed version of ``data`` where each neuron/unit is independently
+        aligned.
+
+    Raises
+    ------
+    ValueError: If ``binned`` and ``data`` have inconsistent dimensions.
+
+    Notes
+    -----
+    Since a different model is fit for each neuron, the warping functions are
+    not necessarily consistent across neurons in the returned data array. Thus,
+    each neuron should be considered as having its own time axis.
+    """
 
     # broadcast keywords into dict, with model instances as keys
     fit_kw['verbose'] = False
-    fit_kw = {m: deepcopy(fit_kw) for m in models}
-
-    # warmstart each model from the warps fit on the previous model.
-    if warmstart:
-        for m1, m0 in zip(models[1:], models):
-            fit_kw[m1]['init_warps'] = m0
 
     # data dimensions
-    n_neurons = binned.shape[-1]
-
-    # if no data is provided, transform binned data
-    if data is None:
-        data = binned.copy()
+    n_neurons = data.n_neurons
+    n_trials = data.n_trials
+    if (n_trials != binned.shape[0]) or (n_neurons != binned.shape[-1]):
+        raise ValueError('Dimension mismatch. Binned data and spike data do '
+                         'not have the same number of neurons or trials.')
 
     # Allocate storage for held out spike times.
-    empty_spikes = SpikeData([], [], [], data.tmin, data.tmax)
-    aligned_data = [empty_spikes.copy() for m in models]
+    trials, spiketimes, neurons = [], [], []
+
+    # Determine neurons to hold out and fit.
+    if transformed_neurons is None:
+        transformed_neurons = range(n_neurons)
 
     # Hold out each neuron, fit models, and apply transform to heldout cell.
-    for n in trange(n_neurons):
+    for n in tqdm(transformed_neurons):
 
         # Define training set.
         trainset = list(set(range(n_neurons)) - {n})
 
-        # Fit each model.
-        for i, m in enumerate(models):
-            m.fit(binned[:, :, trainset], **fit_kw[m])
+        # Fit model.
+        model.fit(binned[:, :, trainset], **fit_kw)
 
-            # Apply warping to test set.
-            w = m.transform(data.select_neurons([n]), rename_indices=False)
+        # Apply warping to test set.
+        w = model.transform(data.select_neurons([n]))
 
-            # Store result on test set.
-            aligned_data[i].append(w, resort_indices=False)
+        # Store result.
+        trials.extend(w.trials)
+        spiketimes.extend(w.spiketimes)
+        neurons.extend(np.full(len(w.trials), n).tolist())
 
-    # Lexographically sort spike times in each object.
-    [d.sort_spikes() for d in aligned_data]
-
-    # Squeeze results if a single model was provided.
-    if len(aligned_data) == 1:
-        aligned_data = aligned_data[0]
-
-    return aligned_data
+    # Package result into a SpikeData instance.
+    return SpikeData(trials, spiketimes, neurons, data.tmin, data.tmax)
 
 
-def null_dataset(data, nbins, resolution=1000):
+def null_dataset(data, nbins, upsample_factor=10):
     """
     Generate Poisson random spiking pattern on each trial.
 
@@ -111,9 +99,8 @@ def null_dataset(data, nbins, resolution=1000):
         Spike train dataset.
     nbins: int
         Number of time bins to use when computing the trial-average PSTH.
-    resolution: int
-        Number of time bins to use when drawing spike times from null
-        distribution.
+    upsample_factor: float
+        How much to upsample synthetic spiketimes over nbins.
 
     Returns
     -------
@@ -123,17 +110,16 @@ def null_dataset(data, nbins, resolution=1000):
     """
 
     # Trial-average estimate of firing rates.
-    binlen = (data.tmax - data.tmin) / nbins  # duration of each time bin
-    psth = data.bin_spiked(nbins).mean(axis=0) / binlen  # spike rate
+    psth = data.bin_spikes(nbins).mean(axis=0)
 
     # Interpolate binned firing rates to length of spike data.
-    f = interp1d(np.arange(nbins), psth, axis=0)
-    psth_upsampled = f(np.linspace(data.tmin, data.tmax, resolution))
-    psth_upsampled *= nbins / resolution
+    up_psth = upsample(psth, upsample_factor, axis=0) / upsample_factor
 
     # Draw poisson random data.
     null_data = SpikeData([], [], [], data.tmin, data.tmax)
     for k in range(data.n_trials):
-        null_data.add_trial(np.random.poisson(psth_upsampled))
+        t, neurons = np.where(np.random.poisson(up_psth))
+        spiketimes = (t / up_psth.shape[0]) * (data.tmax - data.tmin) + data.tmin
+        null_data.add_trial(spiketimes, neurons)
 
     return null_data
