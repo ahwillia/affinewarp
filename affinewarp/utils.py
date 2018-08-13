@@ -1,6 +1,7 @@
 import numba
 import numpy as np
 from .spikedata import SpikeData
+from scipy.interpolate import interp1d
 
 
 def check_data_tensor(data):
@@ -61,3 +62,12 @@ def _diff_gramian(T, smoothness_scale, l2_scale):
     DtD[-1] += l2_scale
 
     return DtD
+
+
+def upsample(signal, factor, axis=-1):
+    """Upsamples numpy array by linear interpolation.
+    """
+    signal = np.asarray(signal)
+    n = signal.shape[axis]
+    f = interp1d(np.linspace(0, 1, n), signal, axis=axis)
+    return f(np.linspace(0, 1, int(n * factor)))
