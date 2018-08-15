@@ -287,27 +287,54 @@ class PiecewiseWarping(object):
         else:
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
 
-    def event_transform(self, times):
+    def event_transform(self, trials, frac_times):
         """
         Time warp events by applying inverse warping functions.
+
+        Parameters
+        ----------
+        trials : array-like
+            Vector of ints holding trial ids for each event.
+        frac_times : array-like
+            Vector of floats holding fractional times for each event
+            (``frac_times[i] == 0`` means that event ``i`` occured at
+            trial start; ``frac_times[i] == 1`` means that event ``i``
+            occured at trial end).
+
+        Returns
+        -------
+        aligned_times : array-like
+            Transformed fractional event times.
         """
 
-        # model must be fitted to perform transform
-        check_is_fitted(self, 'x_knots')
+        # Check that model is fitted and inputs have appropriate dimensions.
+        check_is_fitted(self, ('x_knots', 'y_knots'))
+        trials = np.squeeze(np.asarray(trials))
+        frac_times = np.squeeze(np.asarray(frac_times))
 
-        # check input
-        if not isinstance(times, np.ndarray):
-            raise ValueError('Input must be a ndarray of event times.')
+        if (trials.ndim != 1) or (frac_times.ndim != 1):
+            raise ValueError("Expected inputs to be 1D sequences.")
 
-        # check that there is one event per trial
-        if times.shape[0] != len(self.x_knots):
-            raise ValueError('Number of trials in the input does not match '
-                             'the number of trials in the fitted model.')
+        if not np.issubdtype(trials.dtype, np.integer):
+            raise ValueError("Expected 'trials' to be an array containing "
+                             "integer indices.")
 
-        trials = np.arange(times.shape[0])
-        # TODO(ahwillia): replace with sparsewarp
-        wtimes = sparsealign(self.x_knots, self.y_knots, trials, times)
-        return wtimes
+        if len(trials) != len(frac_times):
+            raise ValueError("Expected 'trials' and 'frac_times' to have "
+                             "equal lengths.")
+
+        if trials.min() < 0:
+            raise ValueError("Expected 'trials' to contain nonnegative "
+                             "integer indices, but saw negative entries.")
+
+        if trials.max() >= self.x_knots.shape[0]:
+            raise ValueError("Dimension mismatch. Model was fit on a dataset "
+                             "containing {} trials, but input 'trials' had "
+                             "indices larger than "
+                             "this.".format(self.x_knots.shape[0]))
+
+        return sparsewarp(self.x_knots, self.y_knots, trials,
+                          frac_times, np.empty_like(frac_times))
 
     def copy_fit(self, model):
         """
@@ -630,58 +657,6 @@ def sparsewarp(X, Y, trials, xtst, out):
         out[i] = y[j] + slope * (xtst[i] - x[j])
 
     return out
-
-
-def sparsealign(_X, _Y, trials, xtst):
-    """
-
-    Parameters
-    ----------
-    X : x coordinates of knots for each trial (shape: n_trials x n_knots)
-    Y : y coordinates of knots for each trial (shape: n_trials x n_knots)
-    trials : int trial id for each coordinate (shape: n_trials)
-    xtst : queried x coordinate for each trial (shape: n_trials)
-
-    Note:
-        X and Y are assumed to be sorted along axis=1
-
-    Returns
-    -------
-    ytst : interpolated y value for each x in xtst (shape: trials)
-    """
-    X = _X[trials]
-    Y = _Y[trials]
-
-    # allocate result
-    ytst = np.empty_like(xtst)
-
-    # for each trial (row of X) find first knot larger than test point
-    p = np.argmin(xtst[:, None] > X, axis=1)
-
-    # make sure that we never try to interpolate to the left of
-    # X[:,0] to avoid out-of-bounds error. Test points requiring
-    # extrapolation are clipped (see below).
-    np.maximum(1, p, out=p)
-
-    # indexing vector along trials (used to index with p)
-    k = np.arange(len(p))
-
-    # distance between adjacent knots
-    dx = np.diff(_X, axis=1)[trials]
-
-    # fractional distance of test points between knots
-    lam = (xtst - X[k, p-1]) / dx[k, p-1]
-
-    # linear interpolation
-    ytst = (Y[k, p-1]*(1-lam)) + (Y[k, p]*(lam))
-
-    # clip test values below X[:, 0] or above X[:, -1]
-    idx = lam > 1
-    ytst[idx] = Y[idx, -1]
-    idx = lam < 0
-    ytst[idx] = Y[idx, 0]
-
-    return ytst
 
 
 @jit(nopython=True)

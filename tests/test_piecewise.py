@@ -2,6 +2,7 @@ import numpy as np
 from affinewarp.piecewisewarp import warp_penalties
 from affinewarp import PiecewiseWarping, SpikeData
 from numpy.testing import assert_allclose, assert_array_equal
+import pytest
 
 
 def test_monotonic_knots():
@@ -76,12 +77,22 @@ def test_identity_transform():
     assert_array_equal(spikedata.neurons, warped.neurons)
 
 
-def test_scaling():
+@pytest.mark.parametrize('s', [.5, 1.0, 2.0])
+def test_scaling(s):
+    # Create random dataset.
     K, T, N = 10, 11, 12
     k, t, n = np.where(np.random.randn(K, T, N) > 1.5)
     data = SpikeData(k, t, n, tmin=0, tmax=T)
+
+    # Create linear warping model.
     model = PiecewiseWarping()
     model.x_knots = np.column_stack((np.zeros(K), np.ones(K)))
-    model.y_knots = np.column_stack((np.zeros(K), np.full(K, .5)))
+    model.y_knots = np.column_stack((np.zeros(K), np.full(K, 1 / s)))
+
+    # Test spike dataset is appropriately transformed.
     wdata = model.transform(data)
-    assert_allclose(wdata.spiketimes, data.spiketimes / 2)
+    assert_allclose(wdata.spiketimes, data.spiketimes / s)
+
+    # Test event_transform(...) has the same functionality.
+    wst = model.event_transform(data.trials, data.fractional_spiketimes)
+    assert_allclose(wst, data.fractional_spiketimes / s)
