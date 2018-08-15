@@ -72,11 +72,16 @@ def test_identity_transform():
     spikedata = SpikeData(k, t, n, tmin=0, tmax=12)
     warped = model.transform(spikedata)
     assert_array_equal(spikedata.trials, warped.trials)
-    assert_array_equal(spikedata.spiketimes, warped.spiketimes)
+    assert_allclose(spikedata.spiketimes, warped.spiketimes)
     assert_array_equal(spikedata.neurons, warped.neurons)
 
 
-if __name__ == '__main__':
-    test_monotonic_knots()
-    test_warp_penalties()
-    test_identity_transform()
+def test_scaling():
+    K, T, N = 10, 11, 12
+    k, t, n = np.where(np.random.randn(K, T, N) > 1.5)
+    data = SpikeData(k, t, n, tmin=0, tmax=T)
+    model = PiecewiseWarping()
+    model.x_knots = np.column_stack((np.zeros(K), np.ones(K)))
+    model.y_knots = np.column_stack((np.zeros(K), np.full(K, .5)))
+    wdata = model.transform(data)
+    assert_allclose(wdata.spiketimes, data.spiketimes / 2)

@@ -7,6 +7,9 @@ import numba
 from scipy.stats import rankdata
 
 
+# TODO: rename "neuron" -> "unit"
+
+
 class SpikeData(object):
     """
     Represents a collection multi-dimensional spike train data.
@@ -77,16 +80,6 @@ class SpikeData(object):
 
         # If dataset isn't empty, sort and pre-process spikes.
         if self.trials.size > 0:
-
-            # Throw away spikes that aren't in range
-            idx = (self.spiketimes >= tmin) & (self.spiketimes <= tmax)
-            self.trials = self.trials[idx]
-            self.neurons = self.neurons[idx]
-            self.spiketimes = self.spiketimes[idx]
-
-            # Check if we threw away all the spikes.
-            if self.trials.size == 0:
-                raise ValueError('No spiketimes within interval [tmin, tmax].')
 
             # Find minimum and maximum indices along neurons and trials.
             min_trial, max_trial = min_max_1d(self.trials)

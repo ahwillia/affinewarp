@@ -56,8 +56,3 @@ def test_reordering():
     Xprm = X[kk]
     permuted = data.reorder_trials(kk)
     assert_array_equal(Xprm, permuted.bin_spikes(X.shape[1]))
-
-
-if __name__ == '__main__':
-    test_bin_spikes()
-    test_reordering()

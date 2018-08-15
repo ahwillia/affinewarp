@@ -8,7 +8,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from .spikedata import SpikeData
 from .shiftwarp import ShiftWarping
-from .utils import _diff_gramian, check_data_tensor
+from .utils import _diff_gramian, check_dimensions
 
 
 class PiecewiseWarping(object):
@@ -124,16 +124,16 @@ class PiecewiseWarping(object):
 
         # Check if warps exist but don't match data dimensions.
         if self.x_knots.shape[0] != data.shape[0]:
-            raise ValueError(
-                'Initial warping functions must equal the number of trials.'
-            )
+            raise ValueError("Initial warping functions must equal the "
+                             "number of trials.")
 
         # Check input data is provided as a dense array (binned spikes).
-        data, is_spikes = check_data_tensor(data)
-        if is_spikes:
+        if not isinstance(data, np.ndarray):
             raise ValueError("'data' must be provided as a dense numpy array "
                              "(neurons x timepoints x trials) holding binned "
                              "spike data.")
+        elif data.ndim == 2:
+            data = data[:, :, None]
 
         # Allocate storage for loss.
         K, T, N = data.shape
@@ -259,31 +259,31 @@ class PiecewiseWarping(object):
                        np.full(K, t), np.empty(K))
         return np.argsort(y)
 
-    def transform(self, X):
+    def transform(self, data):
         """
         Apply inverse warping functions to dense or spike data.
+
+        Parameters
+        ----------
+        data : ndarray or SpikeData instance
+            Time series data to be transformed.
+
+        Returns
+        -------
+        aligned_data
         """
-        # model must be fitted to perform transform
+        # Check that model is fitted. Check dimensions and rename data -> X.
         check_is_fitted(self, 'x_knots')
+        X, is_spikes = check_dimensions(self, data)
 
-        # check that X is an appropriate tensor format
-        X, is_spikes = check_data_tensor(X)
-
-        # check that first axis of X matches n_trials
-        if X.shape[0] != len(self.x_knots):
-            raise ValueError('Number of trials in the input does not match '
-                             'the number of trials in the fitted model.')
-
-        # sparse array transform
+        # Transform spike train.
         if is_spikes:
-            # find warped time
-            # TODO(ahwillia): replace with sparsewarp
-            w = sparsealign(self.x_knots, self.y_knots,
-                            X.trials, X.fractional_spiketimes)
+            w = sparsewarp(self.x_knots, self.y_knots, X.trials,
+                           X.fractional_spiketimes, np.empty(X.n_spikes))
             wt = w * (X.tmax - X.tmin) + X.tmin
             return SpikeData(X.trials, wt, X.neurons, X.tmin, X.tmax)
 
-        # dense array transform
+        # Transform dense data array (trials x timebins x units).
         else:
             return densewarp(self.y_knots, self.x_knots, X, np.empty_like(X))
 
@@ -370,14 +370,13 @@ class PiecewiseWarping(object):
             raise AttributeError('Manual alignment is only supported for '
                                  'linear warping (n_knots=0) models.')
 
-        # check data dimensions as input
-        data, is_spikes = check_data_tensor(data)
-
         # check if dense array
-        if is_spikes:
+        if not isinstance(data, np.ndarray):
             raise ValueError("'data' must be provided as a dense numpy array "
                              "(neurons x timepoints x trials) holding binned "
                              "spike data.")
+        elif data.ndim == 2:
+            data = data[:, :, None]
 
         # check that first warping constraint is well-specified
         if (
@@ -589,45 +588,46 @@ def _interp_quad_loss(a, y1, y2, targ):
 @jit(nopython=True)
 def sparsewarp(X, Y, trials, xtst, out):
     """
-    Implement inverse warping function at discrete test points, e.g. for
+    Implement warping function at discrete test points, e.g. for
     spike time data.
 
     Parameters
     ----------
-    X : x coordinates of knots for each trial (shape: n_trials x n_knots)
-    Y : y coordinates of knots for each trial (shape: n_trials x n_knots)
-    trials : int trial id for each coordinate (shape: n_trials)
-    xtst : queried x coordinate for each trial (shape: n_trials)
+    X : ndarray
+        x coordinates of knots for each trial (shape: n_trials x n_knots)
+    Y : ndarray
+        y coordinates of knots for each trial (shape: n_trials x n_knots)
+    trials : ndarray
+        trial index for each coordinate (shape: n_events)
+    xtst : ndarray
+        queried x coordinate for each trial (shape: n_events)
 
-    Note:
-        X is assumed to be sorted along axis=1
+    Note
+    ----
+    X and Y are assumed to be sorted along axis=1
 
     Returns
     -------
-    ytst : interpolated y value for each x in xtst (shape: trials)
+    ytst : interpolated y value for each x in xtst (shape: n_events)
     """
 
-    m = X.shape[0]
-    n = X.shape[1]
+    n_knots = X.shape[1]
 
-    for i in range(m):
+    for i in range(len(trials)):
 
-        if xtst[i] <= 0:
-            out[i] = Y[trials[i], 0]
+        x = X[trials[i]]
+        y = Y[trials[i]]
 
-        elif xtst[i] >= 1:
-            out[i] = Y[trials[i], -1]
+        for j in range(n_knots):
+            if xtst[i] <= x[j]:
+                break
 
+        if j == 0:
+            slope = (y[1] - y[0]) / (x[1] - x[0])
         else:
-            x = X[trials[i]]
-            y = Y[trials[i]]
+            slope = (y[j] - y[j-1]) / (x[j] - x[j-1])
 
-            j = 0
-            while j < (n-1) and x[j+1] < xtst[i]:
-                j += 1
-
-            slope = (y[j+1] - y[j]) / (x[j+1] - x[j])
-            out[i] = y[j] + slope*(xtst[i] - x[j])
+        out[i] = y[j] + slope * (xtst[i] - x[j])
 
     return out
 

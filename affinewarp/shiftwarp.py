@@ -6,7 +6,7 @@ from sklearn.utils.validation import check_is_fitted
 from copy import deepcopy
 
 from .spikedata import SpikeData
-from .utils import _diff_gramian, check_data_tensor
+from .utils import _diff_gramian, check_dimensions
 
 
 class ShiftWarping(object):
@@ -149,16 +149,16 @@ class ShiftWarping(object):
         Applies inverse warping functions to align raw data across trials.
         """
         check_is_fitted(self, 'shifts')
-        data, is_spikes = check_data_tensor(data)
+        data, is_spikes = check_dimensions(self, data)
 
-        # For SpikeData objects
+        # For SpikeData objects.
         if is_spikes:
-            d = deepcopy(data)
+            d = data.copy()
             return d.shift_each_trial_by_fraction(self.fractional_shifts)
 
+        # For dense data (trials x timebins x units).
         else:
             # warp dense data
-            K, T, N = data.shape
             out = np.empty_like(data)
             _warp_data(data, self.shifts, out)
             return out

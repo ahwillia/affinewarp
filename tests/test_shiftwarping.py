@@ -10,7 +10,3 @@ def test_WtW():
     WtW = np.zeros(T)
     _fill_WtW(shifts, WtW)
     assert int(WtW.sum()) == (K * T)
-
-
-if __name__ == '__main__':
-    test_WtW()
