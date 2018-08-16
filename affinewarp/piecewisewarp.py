@@ -85,6 +85,10 @@ class PiecewiseWarping(object):
 
         y = self.y_knots + (np.random.randn(K, self.n_knots+2) * temperature)
         y.sort(axis=1)
+        # TODO: make eps some parameter somewhere
+        eps = 1e-6
+        y[:, 1:-1] = np.clip(y[:, 1:-1], eps, 1. - eps)
+        #y = np.clip(y, eps, 1. - eps)
 
         return x, y
 
@@ -128,7 +132,7 @@ class PiecewiseWarping(object):
         verbose (optional) : bool
             whether to display progressbar while fitting (default: True)
         """
-        initialize_warps(data.shape[0], init_warps)
+        self.initialize_warps(data.shape[0], init_warps)
 
         # Check input data is provided as a dense array (binned spikes).
         data, is_spikes = check_data_tensor(data)
@@ -136,6 +140,8 @@ class PiecewiseWarping(object):
             raise ValueError("'data' must be provided as a dense numpy array "
                              "(neurons x timepoints x trials) holding binned "
                              "spike data.")
+        if fit_template:
+            check_is_fitted(self, ('template'))
 
         # Allocate storage for loss.
         K, T, N = data.shape
@@ -146,10 +152,14 @@ class PiecewiseWarping(object):
         # Fit model. Alternate between fitting the template and the warping
         # functions.
         pbar = trange(iterations) if verbose else range(iterations)
+        # TODO(poole): clean up knot_hist, maybe make it a flag?
+        self._knot_hist = []
         for it in pbar:
-            self._fit_template(data)
+            if fit_template:
+                self._fit_template(data)
             self._fit_warps(data, warp_iterations)
             self._record_loss(data)
+            self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
 
     def _fit_warps(self, data, iterations=20):
         """Fit warping functions by local random search.
