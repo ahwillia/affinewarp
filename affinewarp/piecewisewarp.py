@@ -10,6 +10,10 @@ from .spikedata import SpikeData
 from .shiftwarp import ShiftWarping
 from .utils import _diff_gramian, check_dimensions
 
+_DATA_ERROR = ValueError("'data' must be provided as a dense numpy array "
+                         "(neurons x timepoints x trials) holding binned "
+                         "spike data.")
+
 
 class PiecewiseWarping(object):
     """Piecewise Affine Time Warping applied to an analog (dense) time series.
@@ -85,26 +89,39 @@ class PiecewiseWarping(object):
 
         y = self.y_knots + (np.random.randn(K, self.n_knots+2) * temperature)
         y.sort(axis=1)
-        # TODO: make eps some parameter somewhere
-        eps = 1e-6
-        y[:, 1:-1] = np.clip(y[:, 1:-1], eps, 1. - eps)
-        #y = np.clip(y, eps, 1. - eps)
+
+        # TODO(poolio): investigate knot clipping.
 
         return x, y
 
-    def initialize_warps(self, n_trials, init_warps='identity'):
-        """Initialize warping functions."""
-        if init_warps == 'identity':
+    def initialize_warps(self, n_trials, init_warps=None):
+        """Initializes warping functions.
+
+        Sets ``self.x_knots`` and ``self.y_knots`` to identity by default, or
+        copies them from a different model (see ``self.copy_fit``).
+
+        Parameters
+        ----------
+        n_trials : int
+            Number of trials.
+        init_warps (optional) : PiecewiseWarping instance, ShiftWarping instance, or None.
+            Model specifying initial warps. If None, warps are initialized to
+            the identity line. (Default: None)
+        """
+
+        if init_warps is None:
+            # Initialize warps to identity.
             self.x_knots = np.tile(
                 np.linspace(0, 1, self.n_knots+2),
                 (n_trials, 1)
             )
             self.y_knots = self.x_knots.copy()
-
-        # If 'init_warps' is another warping model, copy the warps from that
-        # model.
         elif isinstance(init_warps, (PiecewiseWarping, ShiftWarping)):
+            # Copy warps from another model
             self.copy_fit(init_warps)
+        else:
+            raise ValueError("Parameter 'init_warps' misspecified. Expected "
+                             "a PiecewiseWarping or ShiftWarping instance.")
 
         # Check that warps are intialized. If 'init_warps' was not recognized
         # and the warps were not already defined, then raise an exception.
@@ -116,8 +133,9 @@ class PiecewiseWarping(object):
                 'Initial warping functions must equal the number of trials.'
             )
 
-    def fit(self, data, iterations=10, warp_iterations=20, fit_template=True,
-            verbose=True, init_warps='identity', overwrite_loss_hist=True):
+    def fit(self, data, iterations=50, warp_iterations=200, fit_template=True,
+            verbose=True, init_warps=None, overwrite_loss_hist=True,
+            record_knots=False):
         """
         Continues optimization of warps and template (no initialization).
 
@@ -126,43 +144,36 @@ class PiecewiseWarping(object):
         data : ndarray
             3d array (trials x times x features) holding signals to be fit.
         iterations : int
-            number of iterations before stopping
+            Number of iterations before stopping
         warp_iterations : int
-            number of inner iterations to fit warping functions
+            Number of inner iterations to fit warping functions.
         verbose (optional) : bool
-            whether to display progressbar while fitting (default: True)
+            Whether to display progressbar while fitting. (Default: True)
+        init_warps (optional) : PiecewiseWarping instance, ShiftWarping instance, or None.
+            Model specifying initial warps. If None, warps are initialized to
+            the identity line. (Default: None)
+        fit_template (optional): bool
+            If True, fit template and warps. If False, only fit warps.
+            (Default: True)
+        overwrite_loss_hist (optional): bool
+            If True, reinitializes ``self.loss_hist`` to an empty list before
+            fitting. If False, new loss values are appended to the existing
+            array. (Default: True)
+        record_knots (optional): bool
+            If True, ``self.x_knots`` and ``self.y_knots`` are recorded over
+            optimization in ``self._knot_hist``. Useful for debugging
+            optimization (Default: False).
         """
         self.initialize_warps(data.shape[0], init_warps)
 
-        # Initialize warping functions.
-        if init_warps == 'identity':
-            self.x_knots = np.tile(
-                np.linspace(0, 1, self.n_knots+2),
-                (data.shape[0], 1)
-            )
-            self.y_knots = self.x_knots.copy()
-
-        # If 'init_warps' is another warping model, copy the warps from that
-        # model.
-        elif isinstance(init_warps, (PiecewiseWarping, ShiftWarping)):
-            self.copy_fit(init_warps)
-
-        # Check that warps are intialized. If 'init_warps' was not recognized
-        # and the warps were not already defined, then raise an exception.
-        check_is_fitted(self, ('x_knots', 'y_knots'))
-
-        # Check if warps exist but don't match data dimensions.
-        if self.x_knots.shape[0] != data.shape[0]:
-            raise ValueError("Initial warping functions must equal the "
-                             "number of trials.")
-
         # Check input data is provided as a dense array (binned spikes).
         if not isinstance(data, np.ndarray):
-            raise ValueError("'data' must be provided as a dense numpy array "
-                             "(neurons x timepoints x trials) holding binned "
-                             "spike data.")
-        elif data.ndim == 2:
-            data = data[:, :, None]
+            raise _DATA_ERROR
+
+        # Check number of dimensions.
+        data = data[:, :, None] if data.ndim == 2 else data
+        if data.ndim != 3:
+            raise _DATA_ERROR
 
         # Allocate storage for loss.
         K, T, N = data.shape
@@ -173,11 +184,14 @@ class PiecewiseWarping(object):
         # Fit model. Alternate between fitting the template and the warping
         # functions.
         pbar = trange(iterations) if verbose else range(iterations)
+        self._knot_hist = []
         for it in pbar:
-            self._fit_template(data)
+            if fit_template:
+                self._fit_template(data)
             self._fit_warps(data, warp_iterations)
             self._record_loss(data)
-            self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
+            if record_knots:
+                self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
 
     def _fit_warps(self, data, iterations=20):
         """Fit warping functions by local random search.
@@ -385,8 +399,8 @@ class PiecewiseWarping(object):
             check_is_fitted(model, 'x_knots')
             if model.n_knots > self.n_knots:
                 raise ValueError(
-                    "Can't copy fit from another PiecewiseWarping model instance "
-                    "with more interior knots."
+                    "Can't copy fit from another PiecewiseWarping model "
+                    "instance with more interior knots."
                 )
             # initialize knots
             K = len(model.x_knots)
