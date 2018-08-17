@@ -6,7 +6,7 @@ from sklearn.utils.validation import check_is_fitted
 from copy import deepcopy
 
 from .spikedata import SpikeData
-from .utils import _diff_gramian, check_data_tensor
+from .utils import _diff_gramian, check_dimensions
 
 
 class ShiftWarping(object):
@@ -80,6 +80,10 @@ class ShiftWarping(object):
         _fill_WtX(data, self.shifts, WtX)
         self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
+        # penalize warps by distance from identity
+        warp_penalty = self.warp_reg_scale * \
+            np.abs(np.linspace(-L/T, L/T, 2*L+1)[None, :])
+
         # initialize learning curve
         losses = np.empty((K, 2*L+1))
         self.loss_hist = []
@@ -94,7 +98,7 @@ class ShiftWarping(object):
             losses /= (T * N)
 
             # find the best shift for each trial
-            s = np.argmin(losses, axis=1)
+            s = np.argmin(losses + warp_penalty, axis=1)
 
             self.shifts = -L + s
 
@@ -145,16 +149,16 @@ class ShiftWarping(object):
         Applies inverse warping functions to align raw data across trials.
         """
         check_is_fitted(self, 'shifts')
-        data, is_spikes = check_data_tensor(data)
+        data, is_spikes = check_dimensions(self, data)
 
-        # For SpikeData objects
+        # For SpikeData objects.
         if is_spikes:
-            d = deepcopy(data)
+            d = data.copy()
             return d.shift_each_trial_by_fraction(self.fractional_shifts)
 
+        # For dense data (trials x timebins x units).
         else:
             # warp dense data
-            K, T, N = data.shape
             out = np.empty_like(data)
             _warp_data(data, self.shifts, out)
             return out

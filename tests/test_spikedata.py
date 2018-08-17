@@ -8,6 +8,7 @@ def test_bin_spikes():
     spiketimes = [0, 1, 1, 2, 3, 3, 4, 4, 1, 2, 2, 3, 3, 3, 4, 4]
     neurons = [0, 0, 1, 0, 0, 2, 1, 2, 0, 0, 1, 0, 1, 2, 0, 2]
 
+    # Create dataset with single spikes in each bin and compare to np.where
     data = SpikeData(trials, spiketimes, neurons, tmin=0, tmax=4)
     binned = data.bin_spikes(n_bins=5)
     _trials, _times, _neurons = np.where(binned)
@@ -17,6 +18,7 @@ def test_bin_spikes():
     assert_array_equal(neurons, _neurons)
     assert_array_equal(np.unique(binned), [0, 1])
 
+    # Test same dataset with two spikes in each bin.
     # create dataset with two spikes in each bin
     data2 = SpikeData(
         trials+trials, spiketimes+spiketimes, neurons+neurons, tmin=0, tmax=4)
@@ -43,8 +45,3 @@ def test_reordering():
     Xprm = X[kk]
     permuted = data.reorder_trials(kk)
     assert_array_equal(Xprm, permuted.bin_spikes(X.shape[1]))
-
-
-if __name__ == '__main__':
-    test_bin_spikes()
-    test_reordering()
