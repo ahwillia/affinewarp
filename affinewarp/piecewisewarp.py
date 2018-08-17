@@ -85,8 +85,36 @@ class PiecewiseWarping(object):
 
         y = self.y_knots + (np.random.randn(K, self.n_knots+2) * temperature)
         y.sort(axis=1)
+        # TODO: make eps some parameter somewhere
+        eps = 1e-6
+        y[:, 1:-1] = np.clip(y[:, 1:-1], eps, 1. - eps)
+        #y = np.clip(y, eps, 1. - eps)
 
         return x, y
+
+    def initialize_warps(self, n_trials, init_warps='identity'):
+        """Initialize warping functions."""
+        if init_warps == 'identity':
+            self.x_knots = np.tile(
+                np.linspace(0, 1, self.n_knots+2),
+                (n_trials, 1)
+            )
+            self.y_knots = self.x_knots.copy()
+
+        # If 'init_warps' is another warping model, copy the warps from that
+        # model.
+        elif isinstance(init_warps, (PiecewiseWarping, ShiftWarping)):
+            self.copy_fit(init_warps)
+
+        # Check that warps are intialized. If 'init_warps' was not recognized
+        # and the warps were not already defined, then raise an exception.
+        check_is_fitted(self, ('x_knots', 'y_knots'))
+
+        # Check if warps exist but don't match data dimensions.
+        if self.x_knots.shape[0] != n_trials:
+            raise ValueError(
+                'Initial warping functions must equal the number of trials.'
+            )
 
     def fit(self, data, iterations=10, warp_iterations=20, fit_template=True,
             verbose=True, init_warps='identity', overwrite_loss_hist=True):
@@ -104,6 +132,7 @@ class PiecewiseWarping(object):
         verbose (optional) : bool
             whether to display progressbar while fitting (default: True)
         """
+        self.initialize_warps(data.shape[0], init_warps)
 
         # Initialize warping functions.
         if init_warps == 'identity':
@@ -148,6 +177,7 @@ class PiecewiseWarping(object):
             self._fit_template(data)
             self._fit_warps(data, warp_iterations)
             self._record_loss(data)
+            self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
 
     def _fit_warps(self, data, iterations=20):
         """Fit warping functions by local random search.

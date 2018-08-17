@@ -19,6 +19,7 @@ def test_bin_spikes():
     assert_array_equal(np.unique(binned), [0, 1])
 
     # Test same dataset with two spikes in each bin.
+    # create dataset with two spikes in each bin
     data2 = SpikeData(
         trials+trials, spiketimes+spiketimes, neurons+neurons, tmin=0, tmax=4)
     binned2 = data2.bin_spikes(n_bins=5)
@@ -28,18 +29,6 @@ def test_bin_spikes():
     assert_array_equal(spiketimes, _times)
     assert_array_equal(neurons, _neurons)
     assert_array_equal(np.unique(binned2), [0, 2])
-
-    # Test that spikes outside of [tmin, tmax] are ignored during binning.
-    n_spikes = 1000
-    trials = np.random.randint(10, size=n_spikes)
-    neurons = np.random.randint(11, size=n_spikes)
-    spiketimes = np.random.rand(n_spikes)
-    d1 = SpikeData(trials, spiketimes, neurons, tmin=0.25, tmax=0.75)
-    idx = (spiketimes >= d1.tmin) & (spiketimes <= d1.tmax)
-    d2 = SpikeData(trials[idx], spiketimes[idx],
-                   neurons[idx], tmin=d1.tmin, tmax=d1.tmax)
-    for n_bins in [10, 50, 100]:
-        assert_array_equal(d1.bin_spikes(n_bins), d2.bin_spikes(n_bins))
 
 
 def test_reordering():

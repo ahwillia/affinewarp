@@ -6,7 +6,6 @@ import numpy as np
 import numba
 from scipy.stats import rankdata
 
-
 # TODO: rename "neuron" -> "unit"
 
 

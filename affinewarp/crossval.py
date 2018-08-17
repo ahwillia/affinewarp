@@ -7,7 +7,6 @@ from copy import deepcopy
 from .spikedata import SpikeData
 from .utils import upsample
 
-
 # TODO(ahwillia)
 # --------------
 # Add K-fold cross-validation function to determine all hyperparameters. Need

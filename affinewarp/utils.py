@@ -54,28 +54,6 @@ def check_dimensions(model, data):
     return data, isinstance(data, SpikeData)
 
 
-def check_dense_data(data):
-
-    # Data provided as a dense numpy array.
-    if isinstance(data, np.ndarray) and data.ndim == 3:
-        return data, False
-
-    # Dense numpy array with 2-dimensions is okay. In this case, add an extra
-    # dimension/axis (single-neuron dataset).
-    elif isinstance(data, np.ndarray) and data.ndim == 2:
-        return data[:, :, None], False
-
-    # Spiking data format
-    elif isinstance(data, SpikeData):
-        return data, True
-
-    # Data format not recognized
-    else:
-        raise ValueError("Data input should be formatted as a 3d numpy "
-                         "array (trials x times x neurons) or as a "
-                         "SpikeData instance.")
-
-
 def _diff_gramian(T, smoothness_scale, l2_scale):
     """Constructs regularization gramian in least-squares problem.
     """
