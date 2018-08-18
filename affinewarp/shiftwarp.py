@@ -126,14 +126,14 @@ class ShiftWarping(object):
         """
         Returns an ordering of the trials based on the learned shifts.
         """
-        check_is_fitted(self, 'shifts')
+        self.assert_fitted()
         return np.argsort(self.shifts)
 
     def predict(self):
         """
         Returns model prediction (warped version of template on each trial).
         """
-        check_is_fitted(self, 'shifts')
+        self.assert_fitted()
 
         # Allocate space for prediction.
         K = len(self.shifts)
@@ -148,7 +148,7 @@ class ShiftWarping(object):
         """
         Applies inverse warping functions to align raw data across trials.
         """
-        check_is_fitted(self, 'shifts')
+        self.assert_fitted()
         data, is_spikes = check_dimensions(self, data)
 
         # For SpikeData objects.
@@ -164,10 +164,10 @@ class ShiftWarping(object):
             return out
 
     def event_transform(self, times):
-        # must be fitted before transform
-        check_is_fitted(self, 'shifts')
+        # TODO(ahwillia): this may be out of date now.
 
         # check input
+        self.assert_fitted()
         if not isinstance(times, np.ndarray):
             raise ValueError('Input must be a ndarray of event times.')
 
@@ -177,6 +177,9 @@ class ShiftWarping(object):
                              'the number of trials in the fitted model.')
 
         return times - self.fractional_shifts
+
+    def assert_fitted(self):
+        check_is_fitted(self, 'shifts')
 
 
 @jit(nopython=True)

@@ -62,6 +62,7 @@ class PiecewiseWarping(object):
         self.l2_reg_scale = l2_reg_scale
         self.min_temp = min_temp
         self.max_temp = max_temp
+        self.template = None
         self.loss_hist = []
 
     def _mutate_knots(self, temperature):
@@ -95,10 +96,10 @@ class PiecewiseWarping(object):
         return x, y
 
     def initialize_warps(self, n_trials, init_warps=None):
-        """Initializes warping functions.
-
-        Sets ``self.x_knots`` and ``self.y_knots`` to identity by default, or
-        copies them from a different model (see ``self.copy_fit``).
+        """
+        Initializes warping functions. Sets ``self.x_knots`` and
+        ``self.y_knots`` to identity by default, or copies them from a
+        different model (see ``self.copy_fit``).
 
         Parameters
         ----------
@@ -123,21 +124,16 @@ class PiecewiseWarping(object):
             raise ValueError("Parameter 'init_warps' misspecified. Expected "
                              "a PiecewiseWarping or ShiftWarping instance.")
 
-        # Check that warps are intialized. If 'init_warps' was not recognized
-        # and the warps were not already defined, then raise an exception.
-        check_is_fitted(self, ('x_knots', 'y_knots'))
-
-        # Check if warps exist but don't match data dimensions.
+        # Check if initial warps don't match data dimensions.
         if self.x_knots.shape[0] != n_trials:
-            raise ValueError(
-                'Initial warping functions must equal the number of trials.'
-            )
+            raise ValueError("Initial warping functions must equal the number "
+                             "of trials.")
 
     def fit(self, data, iterations=50, warp_iterations=200, fit_template=True,
             verbose=True, init_warps=None, overwrite_loss_hist=True,
             record_knots=False):
         """
-        Continues optimization of warps and template (no initialization).
+        Fits warping functions and model template to data.
 
         Parameters
         ----------
@@ -186,7 +182,7 @@ class PiecewiseWarping(object):
         pbar = trange(iterations) if verbose else range(iterations)
         self._knot_hist = []
         for it in pbar:
-            if fit_template:
+            if fit_template or (self.template is None):
                 self._fit_template(data)
             self._fit_warps(data, warp_iterations)
             self._record_loss(data)
@@ -269,7 +265,7 @@ class PiecewiseWarping(object):
         estimate : ndarray, float
             3d array (trials x times x features) holding model reconstruction.
         """
-        check_is_fitted(self, 'x_knots')
+        self.assert_fitted()
 
         # apply warping functions to template
         K = self.x_knots.shape[0]
@@ -293,7 +289,7 @@ class PiecewiseWarping(object):
         index_array : ndarray, int
             Array of indices that sort trials by magnitude of warping.
         """
-        check_is_fitted(self, 'x_knots')
+        self.assert_fitted()
         if t < 0 or t > 1:
             raise ValueError('Test point must be between zero and one.')
 
@@ -317,7 +313,7 @@ class PiecewiseWarping(object):
         aligned_data
         """
         # Check that model is fitted. Check dimensions and rename data -> X.
-        check_is_fitted(self, 'x_knots')
+        self.assert_fitted()
         X, is_spikes = check_dimensions(self, data)
 
         # Transform spike train.
@@ -352,7 +348,7 @@ class PiecewiseWarping(object):
         """
 
         # Check that model is fitted and inputs have appropriate dimensions.
-        check_is_fitted(self, ('x_knots', 'y_knots'))
+        self.assert_fitted()
         trials = np.squeeze(np.asarray(trials))
         frac_times = np.squeeze(np.asarray(frac_times))
 
@@ -388,7 +384,7 @@ class PiecewiseWarping(object):
 
         if isinstance(model, ShiftWarping):
             # check input
-            check_is_fitted(model, 'shifts')
+            model.assert_fitted()
             K = len(model.shifts)
             self.x_knots = np.tile(np.linspace(0, 1, self.n_knots+2), (K, 1))
             self.y_knots = self.x_knots - model.fractional_shifts[:, None]
@@ -396,7 +392,7 @@ class PiecewiseWarping(object):
 
         elif isinstance(model, PiecewiseWarping):
             # check input
-            check_is_fitted(model, 'x_knots')
+            model.assert_fitted()
             if model.n_knots > self.n_knots:
                 raise ValueError(
                     "Can't copy fit from another PiecewiseWarping model "
@@ -414,6 +410,8 @@ class PiecewiseWarping(object):
             raise ValueError(
                 "Expected either PiecewiseWarping or ShiftWarping model instance."
             )
+
+        return self
 
     def manual_fit(self, data, t0, t1=None, recenter=True):
         """
@@ -494,6 +492,9 @@ class PiecewiseWarping(object):
         self._losses = np.zeros(data.shape[0])
         self.loss_hist = []
         self._record_loss(data)
+
+    def assert_fitted(self):
+        check_is_fitted(self, ('x_knots', 'y_knots', 'template'))
 
     def _initialize_storage(self, n_trials):
         """
