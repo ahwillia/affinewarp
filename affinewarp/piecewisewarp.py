@@ -176,15 +176,22 @@ class PiecewiseWarping(object):
         self._initialize_storage(K)
         if overwrite_loss_hist:
             self.loss_hist = []
+        
+        # Ensure template is initialized.
+        if fit_template or (self.template is None):
+            self._fit_template(data)
+
+        # Record initial loss before optimizing.
+        self._record_loss(data)
 
         # Fit model. Alternate between fitting the template and the warping
         # functions.
         pbar = trange(iterations) if verbose else range(iterations)
         self._knot_hist = []
         for it in pbar:
-            if fit_template or (self.template is None):
-                self._fit_template(data)
             self._fit_warps(data, warp_iterations)
+            if fit_template:
+                self._fit_template(data)
             self._record_loss(data)
             if record_knots:
                 self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
