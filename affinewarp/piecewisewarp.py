@@ -410,7 +410,7 @@ class PiecewiseWarping(object):
             rx = np.random.rand(K, self.n_knots - model.n_knots)
             self.x_knots = np.column_stack((model.x_knots, rx))
             self.x_knots.sort(axis=1)
-            self.y_knots = np.column_stack([model.event_transform(x) for x in self.x_knots.T])
+            self.y_knots = np.column_stack([model.event_transform(np.arange(len(x)), x) for x in self.x_knots.T])
             self.template = model.template.copy()
 
         else:
