@@ -109,6 +109,23 @@ def binned_heatmap(binned, subplots=(5, 6), figsize=(9*1.5, 5*1.5), **kwargs):
 
 
 def compute_affine_loss_grid(model, data, trials=None, nshift=101, nscale=101, shift_range=(-0.5, 0.5), log_scale_range=(-2., 2.)):
+    """Compute model loss on a grid of shifts and scales.
+
+    Args:
+        model: PiecewiseWarping model
+        data: [n_time, n_neuron, n_trial] numpy array
+        trials: optional, default None, list of trials to evaluate
+        nshift: number of shifts
+        nscale: number of scales
+        shift_range: tuple, lower and upper bound for shfits
+        log_scale_range: tuple, log10 of lower and upper bound for scales
+
+    Returns:
+        shifts: numpy array, shifts where loss was evaluated
+        scales: numpy array, scales where loss was evaluated
+        losses: numpy array, shape [ntrial, nshift, nscale] with model loss for each
+          trial, shift, and scale.
+    """
     shifts = np.linspace(*shift_range, nshift)
     scales = np.logspace(*log_scale_range, nscale)
 
@@ -127,8 +144,19 @@ def compute_affine_loss_grid(model, data, trials=None, nshift=101, nscale=101, s
     return shifts, scales, losses
                              
 
-
 def visualize_affine_loss_grid(model, data, n_trials=9, **kwargs):
+    """Visualize losses for each trial, sweeping shifts and scales.
+
+    Args:
+        model: PiecewiseWarping model
+        data: [n_time, n_neuron, n_trial] numpy array
+        n_trials: optional, number of trials to plot
+        trials: optional, list of trials to plot
+        **kwargs: see: extra kwargs passed to compute_affine_loss_grid
+
+    Returns:
+        figure handle
+    """
     trials = kwargs.get('trials', np.arange(n_trials))
     n_trials = len(trials)
     shifts, scales, losses = compute_affine_loss_grid(model, data, **kwargs)
