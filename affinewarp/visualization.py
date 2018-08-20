@@ -113,7 +113,7 @@ def compute_affine_loss_grid(model, data, trials=None, nshift=101, nscale=101, s
 
     Args:
         model: PiecewiseWarping model
-        data: [n_time, n_neuron, n_trial] numpy array
+        data: [n_trial, n_time, n_neuron] numpy array
         trials: optional, default None, list of trials to evaluate
         nshift: number of shifts
         nscale: number of scales
@@ -140,7 +140,8 @@ def compute_affine_loss_grid(model, data, trials=None, nshift=101, nscale=101, s
         y_knots[:, 1] = shift + scale
         warp_with_quadloss(x_knots, y_knots, model.template, losses[:, i], losses[:, i], data[trials], early_stop=False)
     losses = losses.reshape(ntrial, nshift, nscale)
-    losses[ np.isnan(losses)]=np.nanmax(losses)
+    # TODO(ahwillia): checkout NaNs in loss, likely from 0/0 in warp normalization
+    losses[np.isnan(losses)] = np.nanmax(losses)
     return shifts, scales, losses
                              
 
@@ -149,7 +150,7 @@ def visualize_affine_loss_grid(model, data, n_trials=9, **kwargs):
 
     Args:
         model: PiecewiseWarping model
-        data: [n_time, n_neuron, n_trial] numpy array
+        data: [n_trial, n_time, n_neuron] numpy array
         n_trials: optional, number of trials to plot
         trials: optional, list of trials to plot
         **kwargs: see: extra kwargs passed to compute_affine_loss_grid
