@@ -2,9 +2,12 @@
 
 import numpy as np
 import scipy as sci
+import cma
+from joblib import Parallel, delayed
 from numba import jit
 from tqdm import trange, tqdm
 from sklearn.utils.validation import check_is_fitted
+from collections import namedtuple
 
 from .spikedata import SpikeData
 from .shiftwarp import ShiftWarping
@@ -13,6 +16,39 @@ from .utils import _diff_gramian, check_dimensions
 _DATA_ERROR = ValueError("'data' must be provided as a dense numpy array "
                          "(neurons x timepoints x trials) holding binned "
                          "spike data.")
+
+WarpOptInput = namedtuple('WarpOptInput', ['x_knots', 'y_knots', 'template', 'trial_data'])
+WarpOptOutput = namedtuple('WarpOptOutput', ['x_knots', 'y_knots'])
+
+def input_generator(model, data):
+    for t in range(data.shape[0]):
+        yield WarpOptInput(x_knots=model.x_knots[t], y_knots=model.y_knots[t],
+                template=model.template, trial_data=data[t:t+1])
+
+def to_shift_scale(y_knots):
+    shift = y_knots[0]
+    log_scale = np.log10(y_knots[1] - shift)
+    return (shift, log_scale)
+
+def from_shift_scale(theta):
+    return (theta[0], theta[0] + 10**theta[1])
+
+CMA_OPTIONS = {'tolfun': 1e-11, 'verbose':-9}
+def cma_opt_affine_warp(stuff, sigma0=0.5, restarts=1):
+    x0 = to_shift_scale(stuff.y_knots)
+    def loss_fn(theta):
+        y_knots = np.array([from_shift_scale(theta)])
+        x_knots = np.array([[0.0, 1.0]])
+        loss = np.zeros(1)
+        warp_with_quadloss(x_knots, y_knots, stuff.template, loss, loss,
+                stuff.trial_data, early_stop=False)
+        return loss[0]
+    ystar, es = cma.fmin2(loss_fn, x0, sigma0, restarts=restarts, options=CMA_OPTIONS)
+    return WarpOptOutput(x_knots=stuff.x_knots, y_knots=from_shift_scale(ystar))
+
+def cma_opt_piecewise_warp(stuff):
+    pass
+
 
 
 class PiecewiseWarping(object):
@@ -31,7 +67,8 @@ class PiecewiseWarping(object):
     """
 
     def __init__(self, n_knots=0, warp_reg_scale=0, smoothness_reg_scale=0,
-                 l2_reg_scale=1e-4, min_temp=-2, max_temp=-1):
+                 l2_reg_scale=1e-4, min_temp=-2, max_temp=-1, use_es=False,
+                 n_jobs=1):
         """
         Parameters
         ----------
@@ -49,11 +86,22 @@ class PiecewiseWarping(object):
             Smallest mutation rate for evolutionary optimization of warps.
         max_temp : int or float
             Largest mutation rate for evolutionary optimization of warps.
+        use_es: bool, default False
+            Whether to use CMA-ES to optimize warp parameters.
+        n_jobs: int, default 1
+            Number of parallel jobs to use with CMA-ES
         """
 
         # check inputs
         if n_knots < 0 or not isinstance(n_knots, int):
             raise ValueError('Number of knots must be nonnegative integer.')
+
+        if use_es: 
+            if n_knots != 0:
+                raise ValueError("CMA-ES is only implemented for affine warps.")
+            if warp_reg_scale > 0.0:
+                # TODO(pooleb): add warp reg
+                raise ValueError("CMA-ES does not yet support warp regularization.")
 
         # model options
         self.n_knots = n_knots
@@ -62,6 +110,8 @@ class PiecewiseWarping(object):
         self.l2_reg_scale = l2_reg_scale
         self.min_temp = min_temp
         self.max_temp = max_temp
+        self.use_es = use_es
+        self.n_jobs = n_jobs
         self.template = None
         self.loss_hist = []
 
@@ -206,6 +256,14 @@ class PiecewiseWarping(object):
         iterations : int
             Number of iterations to optimize warps.
         """
+        if self.use_es:
+            inputs = input_generator(self, data)
+            if self.n_jobs == 1:
+                new_knots = [cma_opt_affine_warp(s) for s in inputs]
+            else:
+                new_knots = Parallel(n_jobs=self.n_jobs)(delayed(cma_opt_affine_warp)(s) for s in inputs)
+            self.x_knots, self.y_knots = np.array(list(zip(*new_knots)))
+            return
 
         # Decay temperature within each epoch.
         temperatures = np.logspace(self.min_temp, self.max_temp, iterations)
