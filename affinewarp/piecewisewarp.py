@@ -29,13 +29,19 @@ def _input_generator(model, data):
         yield WarpOptInput(x_knots=model.x_knots[t], y_knots=model.y_knots[t],
                 template=model.template, trial_data=data[t:t+1])
 
+def softplus(x):
+    return np.logaddexp(0.0, x)
+
+def inverse_softplus(y):
+    return np.log(-np.expm1(-y))
+
 def _to_shift_scale(y_knots):
     shift = y_knots[0]
-    log_scale = np.log10(y_knots[1] - shift)
+    log_scale = inverse_softplus(y_knots[1] - shift)
     return (shift, log_scale)
 
 def _from_shift_scale(theta):
-    return (theta[0], theta[0] + 10**theta[1])
+    return (theta[0], theta[0] + softplus(theta[1]))
 
 # Default CMA-ES OPTIONS
 CMAES_OPTIONS = {'tolfun': 1e-11, 'verbose':-9}
@@ -61,7 +67,6 @@ def cma_opt_affine_warp(stuff, sigma0=0.5, restarts=1):
         return loss[0]
     ystar, es = cma.fmin2(loss_fn, x0, sigma0, restarts=restarts, options=CMAES_OPTIONS)
     return WarpOptOutput(x_knots=stuff.x_knots, y_knots=_from_shift_scale(ystar))
-
 
 
 class PiecewiseWarping(object):
