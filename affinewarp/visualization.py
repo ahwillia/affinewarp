@@ -155,18 +155,22 @@ def visualize_affine_loss_grid(model, data, n_trials=9, **kwargs):
         **kwargs: see: extra kwargs passed to compute_affine_loss_grid
 
     Returns:
-        figure handle
+        fig: figure handle
+        axs: list of axis handles 
     """
     trials = kwargs.get('trials', np.arange(n_trials))
     n_trials = len(trials)
+    kwargs['trials'] = trials
     shifts, scales, losses = compute_affine_loss_grid(model, data, **kwargs)
 
     n_rows = int(np.sqrt(n_trials))
     n_cols = int(np.ceil(n_trials / float(n_rows)))
     fig = plt.figure(figsize=(n_cols * 3, n_rows * 3))
     
+    axs = []
     for i in range(n_trials):
-        plt.subplot(n_rows, n_cols, i+1)
+        ax = plt.subplot(n_rows, n_cols, i+1)
+        axs.append(ax)
         plt.pcolor(shifts, np.log(scales), losses[i])
         shift = model.y_knots[trials[i], 0]
         scale = model.y_knots[trials[i], 1] - shift
@@ -182,4 +186,4 @@ def visualize_affine_loss_grid(model, data, n_trials=9, **kwargs):
             plt.gca().set_yticklabels([])
 
     fig.tight_layout()
-    return fig
+    return fig, axs
