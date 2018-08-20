@@ -20,14 +20,22 @@ _DATA_ERROR = ValueError("'data' must be provided as a dense numpy array "
 # Tuples used for the input and output of CMA-ES optimization routines.
 # By splitting the model and dataset into a separate input for each trial,
 # we can parallelize the warp computation and prevent extra copying of data.
-WarpOptInput = namedtuple('WarpOptInput', ['x_knots', 'y_knots', 'template', 'trial_data'])
+WarpOptInput = namedtuple('WarpOptInput', ['x_knots', 'y_knots', 'template',
+    'trial_data', 'warp_reg_scale'])
 WarpOptOutput = namedtuple('WarpOptOutput', ['x_knots', 'y_knots'])
 
 def _input_generator(model, data):
     """Split model and data into trial-specific tuples."""
     for t in range(data.shape[0]):
         yield WarpOptInput(x_knots=model.x_knots[t], y_knots=model.y_knots[t],
-                template=model.template, trial_data=data[t:t+1])
+                template=model.template, trial_data=data[t:t+1],
+                warp_reg_scale=model.warp_reg_scale)
+
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+def logit(y):
+    return  np.log(y / (1.0 - y))
 
 def softplus(x):
     return np.logaddexp(0.0, x)
@@ -46,7 +54,7 @@ def _from_shift_scale(theta):
 # Default CMA-ES OPTIONS
 CMAES_OPTIONS = {'tolfun': 1e-11, 'verbose':-9}
 
-def cma_opt_affine_warp(stuff, sigma0=0.5, restarts=1):
+def cma_opt_affine_warp(stuff, sigma0=1.0, restarts=2):
     """Optimize affine warps using CMA-ES.
    
     Args:
@@ -64,6 +72,10 @@ def cma_opt_affine_warp(stuff, sigma0=0.5, restarts=1):
         loss = np.zeros(1)
         warp_with_quadloss(x_knots, y_knots, stuff.template, loss, loss,
                 stuff.trial_data, early_stop=False)
+        if stuff.warp_reg_scale > 0.0:
+            penalty = np.zeros(1)
+            warp_penalties(x_knots, y_knots, penalty)
+            loss += penalty
         return loss[0]
     ystar, es = cma.fmin2(loss_fn, x0, sigma0, restarts=restarts, options=CMAES_OPTIONS)
     return WarpOptOutput(x_knots=stuff.x_knots, y_knots=_from_shift_scale(ystar))
@@ -118,9 +130,6 @@ class PiecewiseWarping(object):
         if use_es: 
             if n_knots != 0:
                 raise NotImplementedError("CMA-ES is only implemented for affine warps.")
-            if warp_reg_scale > 0.0:
-                # TODO(pooleb): add warp reg
-                raise NotImplementedError("CMA-ES does not yet support warp regularization.")
 
         # model options
         self.n_knots = n_knots
