@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from affinewarp.piecewisewarp import warp_with_quadloss
+
 
 
 def rasters(data, subplots=(5, 6), fig=None, axes=None, figsize=(9*1.5, 5*1.5),
@@ -104,3 +106,52 @@ def binned_heatmap(binned, subplots=(5, 6), figsize=(9*1.5, 5*1.5), **kwargs):
     fig.patch.set_facecolor('k')
 
     return fig, axes
+
+
+def compute_affine_loss_grid(model, data, trials=None, nshift=101, nscale=101, shift_range=(-0.5, 0.5), log_scale_range=(-2., 2.)):
+    shifts = np.linspace(*shift_range, nshift)
+    scales = np.logspace(*log_scale_range, nscale)
+
+    shift_grid, scale_grid = np.meshgrid(shifts, scales)
+    if trials is None:
+        trials = np.arange(data.shape[0])
+    ntrial = len(trials)
+    losses = np.zeros((ntrial, nshift * nscale))
+    x_knots, y_knots = model.x_knots[trials].copy(), model.y_knots[trials].copy()
+    for i, (shift, scale) in enumerate(zip(shift_grid.ravel(), scale_grid.ravel())):
+        y_knots[:, 0] = shift
+        y_knots[:, 1] = shift + scale
+        warp_with_quadloss(x_knots, y_knots, model.template, losses[:, i], losses[:, i], data[trials], early_stop=False)
+    losses = losses.reshape(ntrial, nshift, nscale)
+    losses[ np.isnan(losses)]=np.nanmax(losses)
+    return shifts, scales, losses
+                             
+
+
+def visualize_affine_loss_grid(model, data, n_trials=9, **kwargs):
+    trials = kwargs.get('trials', np.arange(n_trials))
+    n_trials = len(trials)
+    shifts, scales, losses = compute_affine_loss_grid(model, data, **kwargs)
+
+    n_rows = int(np.sqrt(n_trials))
+    n_cols = int(np.ceil(n_trials / float(n_rows)))
+    fig = plt.figure(figsize=(n_cols * 3, n_rows * 3))
+    
+    for i in range(n_trials):
+        plt.subplot(n_rows, n_cols, i+1)
+        plt.pcolor(shifts, np.log(scales), losses[i])
+        shift = model.y_knots[trials[i], 0]
+        scale = model.y_knots[trials[i], 1] - shift
+        ax = plt.axis()
+        plt.scatter(shift, np.log(scale), c='w', marker='*', s=50)
+        plt.axis(ax)
+        plt.title('Trial %d'%i)
+        if i == n_cols * (n_rows - 1):
+            plt.xlabel('shift')
+            plt.ylabel('log10(scale)')
+        else:
+            plt.gca().set_xticklabels([])
+            plt.gca().set_yticklabels([])
+
+    fig.tight_layout()
+    return fig
