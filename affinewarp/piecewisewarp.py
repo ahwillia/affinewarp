@@ -75,7 +75,7 @@ def cma_opt_affine_warp(stuff, sigma0=1.0, restarts=2):
         if stuff.warp_reg_scale > 0.0:
             penalty = np.zeros(1)
             warp_penalties(x_knots, y_knots, penalty)
-            loss += self.warp_reg_scale * penalty
+            loss += stuff.warp_reg_scale * penalty
         return loss[0]
     ystar, es = cma.fmin2(loss_fn, x0, sigma0, restarts=restarts, options=CMAES_OPTIONS)
     return WarpOptOutput(x_knots=stuff.x_knots, y_knots=_from_shift_scale(ystar))
