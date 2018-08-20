@@ -5,3 +5,5 @@ numba
 tqdm
 sparse
 sklearn
+joblib
+cma
