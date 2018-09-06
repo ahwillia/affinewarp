@@ -81,7 +81,7 @@ def cma_opt_affine_warp(stuff, sigma0=1.0, restarts=2):
         x_knots = np.array([[0.0, 1.0]])
         loss = np.zeros(1)
         warp_with_quadloss(x_knots, y_knots, stuff.template, loss, loss,
-                stuff.trial_data, early_stop=False)
+                           stuff.trial_data, early_stop=False)
         if stuff.warp_reg_scale > 0.0:
             penalty = np.zeros(1)
             warp_penalties(x_knots, y_knots, penalty)
@@ -323,15 +323,20 @@ class PiecewiseWarping(object):
         # TODO parallelize this?
         n_trials = data.shape[0]
         for k in range(n_trials):
-            # Call JIT-compiled function that overwrites knots on each trial.
             a, b, c, d = np.empty((4, self.n_knots + 2))
-            self._losses[k], self._penalties[k], self.x_knots[k], self.y_knots[k] = _fit_warping_knots(
+            new_loss, new_pen, self.x_knots[k], self.y_knots[k] = _fit_warping_knots(
                 np.copy(self.x_knots[k]), np.copy(self.y_knots[k]),  # initial guess
                 self.template, data[k],  # warping template and target
-                self.warp_reg_scale, iterations,  # params for random search
+                self.warp_reg_scale, self._losses[k], iterations,  # params for random search
                 self.n_restarts, self.min_temp, self.max_temp,  # more params
                 a, b, c, d
             )
+            if (new_loss + new_pen) > (self._losses[k] + self._penalties[k]):
+                pass
+                #raise AssertionError
+            else:
+                self._losses[k] = new_loss
+                self._penalties[k] = new_pen
 
     def _fit_template(self, data):
         """Fit warping template.
@@ -746,7 +751,7 @@ def warp_with_quadloss(X, Y, template, new_loss, last_loss, data, early_stop=Tru
 
 
 @jit(nopython=True)
-def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale,
+def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale, init_loss,
                        iterations, n_restarts, min_temp, max_temp, curr_x, curr_y, next_x, next_y):
 
     # Problem dimensions.
@@ -763,10 +768,10 @@ def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale,
         curr_y[i] = y_knots[i]
 
     # Loss for identity warp (mean squared error across neurons and trials).
-    identity_loss = _quad_loss(data.ravel(), template.ravel()) / len(data)
+    identity_loss = _quad_loss(data.ravel(), template.ravel()) / data.size
 
     # Do multiple random searches with refined proposal distribution.
-    for start in range(n_restarts):
+    for start in range(n_restarts + 1):
 
         # First iteration starts from last set of knots. All subsequent
         # restarts start from identity warp.
@@ -869,7 +874,7 @@ def assess_warp(X, Y, template, data, warp_reg_scale):
     loss = 0.0
 
     # initialize line segement for interpolation
-    slope = (X[1] - Y[0]) / (X[1] - Y[0])
+    slope = (Y[1] - Y[0]) / (X[1] - X[0])
     x0 = X[0]
     y0 = Y[0]
 
@@ -907,7 +912,7 @@ def assess_warp(X, Y, template, data, warp_reg_scale):
                 rem, template[int(j)], template[int(j)+1], data[t]
             )
 
-    return loss / len(data), penalty
+    return loss / data.size, warp_reg_scale * penalty
 
 
 @jit(nopython=True)
