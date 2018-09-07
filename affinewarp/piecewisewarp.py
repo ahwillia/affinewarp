@@ -2,105 +2,13 @@
 
 import numpy as np
 import scipy as sci
-import cma
-from joblib import Parallel, delayed
 from numba import jit
 from tqdm import trange, tqdm
 from sklearn.utils.validation import check_is_fitted
-from collections import namedtuple
 
 from .spikedata import SpikeData
 from .shiftwarp import ShiftWarping
 from .utils import _diff_gramian, check_dimensions
-
-_DATA_ERROR = ValueError("'data' must be provided as a dense numpy array "
-                         "(neurons x timepoints x trials) holding binned "
-                         "spike data.")
-
-# Tuples used for the input and output of CMA-ES optimization routines.
-# By splitting the model and dataset into a separate input for each trial,
-# we can parallelize the warp computation and prevent extra copying of data.
-WarpOptInput = namedtuple('WarpOptInput', ['x_knots', 'y_knots', 'template',
-    'trial_data', 'warp_reg_scale'])
-WarpOptOutput = namedtuple('WarpOptOutput', ['x_knots', 'y_knots'])
-
-
-def _input_generator(model, data):
-    """Split model and data into trial-specific tuples."""
-    for t in range(data.shape[0]):
-        yield WarpOptInput(x_knots=model.x_knots[t], y_knots=model.y_knots[t],
-                template=model.template, trial_data=data[t:t+1],
-                warp_reg_scale=model.warp_reg_scale)
-
-
-def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
-
-
-def logit(y):
-    return np.log(y / (1.0 - y))
-
-
-def softplus(x):
-    return np.logaddexp(0.0, x)
-
-
-def inverse_softplus(y):
-    return np.log(-np.expm1(-y))
-
-
-def _to_shift_scale(y_knots):
-    shift = y_knots[0]
-    log_scale = inverse_softplus(y_knots[1] - shift)
-    return (shift, log_scale)
-
-
-def _from_shift_scale(theta):
-    return (theta[0], theta[0] + softplus(theta[1]))
-
-
-# Default CMA-ES OPTIONS
-CMAES_OPTIONS = {'tolfun': 1e-11, 'verbose': -9}
-
-
-def cma_opt_affine_warp(stuff, sigma0=1.0, restarts=2):
-    """Optimize affine warps using CMA-ES.
-
-    Args:
-        stuff: WarpOptInput containing x_knots, y_knots, template, and data
-        sigma0: initial standard deviation
-        restarts: number of restarts
-
-    Returns:
-        WarpOptOutput containing x_knots and y_knots
-    """
-    x0 = _to_shift_scale(stuff.y_knots)
-
-    def loss_fn(theta):
-        y_knots = np.array([_from_shift_scale(theta)])
-        x_knots = np.array([[0.0, 1.0]])
-        loss = np.zeros(1)
-        warp_with_quadloss(x_knots, y_knots, stuff.template, loss, loss,
-                           stuff.trial_data, early_stop=False)
-        if stuff.warp_reg_scale > 0.0:
-            penalty = np.zeros(1)
-            warp_penalties(x_knots, y_knots, penalty)
-            loss += stuff.warp_reg_scale * penalty
-        return loss[0]
-
-    ystar, es = cma.fmin2(loss_fn, x0, sigma0, restarts=restarts, options=CMAES_OPTIONS)
-    return WarpOptOutput(x_knots=stuff.x_knots, y_knots=_from_shift_scale(ystar))
-
-# TODO
-
-# - Simplify warp with quad loss and warp penalties to work for a single trial.
-# - Make wrapper functions:
-#
-#  def warp_penalties(X, Y, scale):
-#      result = 0.0
-#      for x, y in zip(X, Y):
-#           result += warp_penalty_one_trial(x, y)
-#      return scale * result
 
 
 class PiecewiseWarping(object):
@@ -119,30 +27,27 @@ class PiecewiseWarping(object):
     """
 
     def __init__(self, n_knots=0, warp_reg_scale=0.0, smoothness_reg_scale=0.0,
-                 l2_reg_scale=1e-4, min_temp=-2, max_temp=-1, n_restarts=5,
-                 use_es=False, n_jobs=1):
+                 l2_reg_scale=1e-4, min_temp=-2, max_temp=-1, n_restarts=2,
+                 n_jobs=1):
         """
         Parameters
         ----------
-        n_knots : int
+        n_knots : int, default 0
             Nonnegative number specifying number of pieces in the piecewise
             warping function.
-        warp_reg_scale : int or float
+        warp_reg_scale : int or float, default 0.0
             Penalty strength on distance of warping functions to identity line.
-        smoothness_reg_scale : int or float
+        smoothness_reg_scale : int or float, default 0.0
             Penalty strength on L2 norm of second temporal derivatives of the
             warping templates.
-        l2_reg_scale : int or float
+        l2_reg_scale : int or float, default 1e-4
             Penalty strength on L2 norm of the warping template.
-        min_temp : int or float
+        min_temp : int or float, default -2
             Smallest mutation rate for evolutionary optimization of warps.
-        max_temp : int or float
+        max_temp : int or float, default -1
             Largest mutation rate for evolutionary optimization of warps.
-        n_restarts : int
+        n_restarts : int, default 2
             Number of times to restart optimization on warps.
-        use_es: bool, default False
-            If True, use CMA-ES to optimize warp parameters. Otherwise, use
-            annealed random search.
         n_jobs: int, default 1
             Number of parallel jobs to use with CMA-ES
         """
@@ -150,10 +55,6 @@ class PiecewiseWarping(object):
         # check inputs
         if n_knots < 0 or not isinstance(n_knots, int):
             raise ValueError('Number of knots must be nonnegative integer.')
-
-        if use_es:
-            if n_knots != 0:
-                raise NotImplementedError("CMA-ES is only implemented for affine warps.")
 
         # model options
         self.n_knots = n_knots
@@ -163,7 +64,6 @@ class PiecewiseWarping(object):
         self.min_temp = min_temp
         self.max_temp = max_temp
         self.n_restarts = n_restarts
-        self.use_es = use_es
         self.n_jobs = n_jobs
         self.template = None
         self.loss_hist = []
@@ -308,35 +208,11 @@ class PiecewiseWarping(object):
         iterations : int
             Number of iterations to optimize warps.
         """
-        if self.use_es:
-            inputs = _input_generator(self, data)
-            if self.n_jobs == 1:
-                new_knots = [cma_opt_affine_warp(s) for s in inputs]
-            else:
-                new_knots = Parallel(n_jobs=self.n_jobs)(delayed(cma_opt_affine_warp)(s) for s in inputs)
-            self.x_knots, self.y_knots = np.array(list(zip(*new_knots)))
-            return
-
-        # Decay temperature within each epoch.
-        temperatures = np.logspace(self.min_temp, self.max_temp, iterations)
-
-        # TODO parallelize this?
-        n_trials = data.shape[0]
-        for k in range(n_trials):
-            a, b, c, d = np.empty((4, self.n_knots + 2))
-            new_loss, new_pen, self.x_knots[k], self.y_knots[k] = _fit_warping_knots(
-                np.copy(self.x_knots[k]), np.copy(self.y_knots[k]),  # initial guess
-                self.template, data[k],  # warping template and target
-                self.warp_reg_scale, self._losses[k], iterations,  # params for random search
-                self.n_restarts, self.min_temp, self.max_temp,  # more params
-                a, b, c, d
-            )
-            if (new_loss + new_pen) > (self._losses[k] + self._penalties[k]):
-                pass
-                #raise AssertionError
-            else:
-                self._losses[k] = new_loss
-                self._penalties[k] = new_pen
+        storage = np.empty((data.shape[0], 4, self.n_knots + 2))
+        _fit_warps_all_trials(self.x_knots, self.y_knots, self.template, data,
+                              self.warp_reg_scale, self._losses,
+                              self._penalties, iterations, self.n_restarts,
+                              self.min_temp, self.max_temp, storage)
 
     def _fit_template(self, data):
         """Fit warping template.
@@ -493,7 +369,6 @@ class PiecewiseWarping(object):
         """
 
         if isinstance(model, ShiftWarping):
-            # check input
             model.assert_fitted()
             K = len(model.shifts)
             self.x_knots = np.tile(np.linspace(0, 1, self.n_knots+2), (K, 1))
@@ -501,19 +376,27 @@ class PiecewiseWarping(object):
             self.template = model.template.copy()
 
         elif isinstance(model, PiecewiseWarping):
-            # check input
+            # Check input.
             model.assert_fitted()
             if model.n_knots > self.n_knots:
                 raise ValueError(
                     "Can't copy fit from another PiecewiseWarping model "
                     "instance with more interior knots."
                 )
-            # initialize knots
             K = len(model.x_knots)
+
+            # Initialize x knots, if self has additional knots place them
+            # randomly at random positions.
             rx = np.random.rand(K, self.n_knots - model.n_knots)
             self.x_knots = np.column_stack((model.x_knots, rx))
             self.x_knots.sort(axis=1)
-            self.y_knots = np.column_stack([model.event_transform(np.arange(len(x)), x) for x in self.x_knots.T])
+
+            # Place y knots so that warping function matches copied model.
+            # Additional / redundant knots are placed randomly.
+            y = [model.event_transform(np.arange(len(x)), x) for x in self.x_knots.T]
+            self.y_knots = np.column_stack(y)
+
+            # Copy template.
             self.template = model.template.copy()
 
         else:
@@ -630,6 +513,24 @@ class PiecewiseWarping(object):
 
         # store objective function over time
         self.loss_hist.append(self._losses.mean())
+
+
+@jit(nopython=True, nogil=True, parallel=True)
+def _fit_warps_all_trials(x_knots, y_knots, template, data, warp_reg_scale,
+                          losses, penalties, iterations, n_restarts,
+                          min_temp, max_temp, storage):
+
+    for k in range(x_knots.shape[0]):
+        new_loss, new_pen = _fit_warping_knots(
+            x_knots[k], y_knots[k],  # initial guess
+            template, data[k],  # warping template and target
+            warp_reg_scale, iterations,  # params for random search
+            n_restarts, min_temp, max_temp,  # more params
+            storage[k, 0], storage[k, 1],
+            storage[k, 2], storage[k, 3]
+        )
+        losses[k] = new_loss
+        penalties[k] = new_pen
 
 
 @jit(nopython=True)
@@ -750,9 +651,10 @@ def warp_with_quadloss(X, Y, template, new_loss, last_loss, data, early_stop=Tru
                 break
 
 
-@jit(nopython=True)
-def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale, init_loss,
-                       iterations, n_restarts, min_temp, max_temp, curr_x, curr_y, next_x, next_y):
+@jit(nopython=True, nogil=True)
+def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale,
+                       iterations, n_restarts, min_temp, max_temp, curr_x,
+                       curr_y, next_x, next_y):
 
     # Problem dimensions.
     n_knots = len(x_knots)
@@ -828,10 +730,10 @@ def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale, init_lo
                     x_knots[i] = curr_x[i]
                     y_knots[i] = curr_y[i]
 
-    return best_loss, best_penalty, x_knots, y_knots
+    return best_loss, best_penalty
 
 
-@jit(nopython=True)
+@jit(nopython=True, nogil=True)
 def assess_warp(X, Y, template, data, warp_reg_scale):
     # -----------------------------
     # -- Compute Warping Penalty --
@@ -915,7 +817,7 @@ def assess_warp(X, Y, template, data, warp_reg_scale):
     return loss / data.size, warp_reg_scale * penalty
 
 
-@jit(nopython=True)
+@jit(nopython=True, nogil=True)
 def _quad_loss(pred, targ):
     result = 0.0
     for i in range(pred.size):
@@ -923,7 +825,7 @@ def _quad_loss(pred, targ):
     return result
 
 
-@jit(nopython=True)
+@jit(nopython=True, nogil=True)
 def _interp_quad_loss(a, y1, y2, targ):
     result = 0.0
     b = 1 - a
