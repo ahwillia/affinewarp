@@ -3,6 +3,7 @@
 import numpy as np
 import scipy as sci
 from numba import jit
+import numba
 from tqdm import trange, tqdm
 from sklearn.utils.validation import check_is_fitted
 
@@ -27,8 +28,7 @@ class PiecewiseWarping(object):
     """
 
     def __init__(self, n_knots=0, warp_reg_scale=0.0, smoothness_reg_scale=0.0,
-                 l2_reg_scale=1e-4, min_temp=-2, max_temp=-1, n_restarts=2,
-                 n_jobs=1):
+                 l2_reg_scale=1e-4, min_temp=-2, max_temp=0, n_restarts=1):
         """
         Parameters
         ----------
@@ -44,12 +44,10 @@ class PiecewiseWarping(object):
             Penalty strength on L2 norm of the warping template.
         min_temp : int or float, default -2
             Smallest mutation rate for evolutionary optimization of warps.
-        max_temp : int or float, default -1
+        max_temp : int or float, default 0
             Largest mutation rate for evolutionary optimization of warps.
-        n_restarts : int, default 2
+        n_restarts : int, default 1
             Number of times to restart optimization on warps.
-        n_jobs: int, default 1
-            Number of parallel jobs to use with CMA-ES
         """
 
         # check inputs
@@ -64,7 +62,6 @@ class PiecewiseWarping(object):
         self.min_temp = min_temp
         self.max_temp = max_temp
         self.n_restarts = n_restarts
-        self.n_jobs = n_jobs
         self.template = None
         self.loss_hist = []
 
@@ -93,8 +90,6 @@ class PiecewiseWarping(object):
 
         y = self.y_knots + (np.random.randn(K, self.n_knots+2) * temperature)
         y.sort(axis=1)
-
-        # TODO(poolio): investigate knot clipping.
 
         return x, y
 
@@ -320,7 +315,7 @@ class PiecewiseWarping(object):
         Parameters
         ----------
         trials : array-like
-            Vector of ints holding trial ids for each event.
+            Vector of ints holding trial indices for each event.
         frac_times : array-like
             Vector of floats holding fractional times for each event
             (``frac_times[i] == 0`` means that event ``i`` occured at
@@ -515,12 +510,12 @@ class PiecewiseWarping(object):
         self.loss_hist.append(self._losses.mean())
 
 
-@jit(nopython=True, nogil=True, parallel=True)
+@jit(nopython=True, parallel=True)
 def _fit_warps_all_trials(x_knots, y_knots, template, data, warp_reg_scale,
                           losses, penalties, iterations, n_restarts,
                           min_temp, max_temp, storage):
 
-    for k in range(x_knots.shape[0]):
+    for k in numba.prange(x_knots.shape[0]):
         new_loss, new_pen = _fit_warping_knots(
             x_knots[k], y_knots[k],  # initial guess
             template, data[k],  # warping template and target
@@ -817,7 +812,7 @@ def assess_warp(X, Y, template, data, warp_reg_scale):
     return loss / data.size, warp_reg_scale * penalty
 
 
-@jit(nopython=True, nogil=True)
+@jit(nopython=True)
 def _quad_loss(pred, targ):
     result = 0.0
     for i in range(pred.size):
@@ -825,7 +820,7 @@ def _quad_loss(pred, targ):
     return result
 
 
-@jit(nopython=True, nogil=True)
+@jit(nopython=True)
 def _interp_quad_loss(a, y1, y2, targ):
     result = 0.0
     b = 1 - a
