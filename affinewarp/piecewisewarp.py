@@ -11,6 +11,10 @@ from .spikedata import SpikeData
 from .shiftwarp import ShiftWarping
 from .utils import _diff_gramian, check_dimensions
 
+_DATA_ERROR = ValueError("'data' must be provided as a dense numpy array "
+                         "(neurons x timepoints x trials) holding binned "
+                         "spike data.")
+
 
 class PiecewiseWarping(object):
     """Piecewise Affine Time Warping applied to an analog (dense) time series.
@@ -583,69 +587,6 @@ def _fast_template_grams(WtW, WtX, data, X, Y):
                 WtX[i+1] += lam * data[k, t]
 
 
-@jit(nopython=True)
-def warp_with_quadloss(X, Y, template, new_loss, last_loss, data, early_stop=True):
-
-    # num timepoints
-    K, T, N = data.shape
-
-    # number discontinuities in piecewise linear function
-    n_knots = X.shape[1]
-
-    # normalizing divisor for average loss across each trial
-    denom = T * N
-
-    # iterate over trials
-    for k in range(K):
-
-        # early stopping
-        if early_stop and new_loss[k] >= last_loss[k]:
-            break
-
-        # initialize line segement for interpolation
-        y0 = Y[k, 0]
-        x0 = X[k, 0]
-        slope = (Y[k, 1] - Y[k, 0]) / (X[k, 1] - X[k, 0])
-
-        # 'n' counts knots in piecewise affine warping function.
-        n = 1
-
-        # iterate over time bins
-        for t in range(T):
-
-            # fraction of trial complete
-            x = t / (T - 1)
-
-            # update interpolation point
-            while (n < n_knots-1) and (x > X[k, n]):
-                y0 = Y[k, n]
-                x0 = X[k, n]
-                slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
-                n += 1
-
-            # compute index in warped time
-            z = y0 + slope*(x - x0)
-
-            # clip warp interpolation between zero and one
-            if z <= 0:
-                new_loss[k] += _quad_loss(template[0], data[k, t]) / denom
-
-            elif z >= 1:
-                new_loss[k] += _quad_loss(template[-1], data[k, t]) / denom
-
-            # do linear interpolation
-            else:
-                j = z * (T-1)
-                rem = j % 1
-                new_loss[k] += _interp_quad_loss(
-                    rem, template[int(j)], template[int(j)+1], data[k, t]
-                ) / denom
-
-            # early stopping
-            if early_stop and new_loss[k] >= last_loss[k]:
-                break
-
-
 @jit(nopython=True, nogil=True)
 def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale,
                        iterations, n_restarts, min_temp, max_temp, curr_x,
@@ -926,53 +867,3 @@ def densewarp(X, Y, data, out):
                 out[k, t] = (1-rem) * data[kk, i] + rem * data[kk, i+1]
 
     return out
-
-
-@jit(nopython=True)
-def warp_penalties(X, Y, penalties):
-
-    # TODO: there is a possible bug if warp_reg_scale is large.  The
-    # objective function does not monotonically decrease.
-
-    K = X.shape[0]
-    J = X.shape[1]
-
-    for k in range(K):
-
-        # overwrite penalties vector
-        penalties[k] = 0
-
-        # left point of line segment
-        x0 = X[k, 0]
-        y0 = Y[k, 0]
-
-        for j in range(1, J):
-
-            # right point of line segment
-            x1 = X[k, j]
-            y1 = Y[k, j] - x1  # subtract off identity warp.
-
-            # if y0 and y1 have opposite signs
-            if ((y0 < 0) and (y1 > 0)) or ((y0 > 0) and (y1 < 0)):
-
-                # v is the location of the x-intercept expressed as a fraction.
-                # v = 1 means that y1 is zero, v = 0 means that y0 is zero
-                v = y1 / (y1 - y0)
-
-                # penalty is the area of two right triangles with heights
-                # y0 and y1 and bases (x1 - x0) times location of x-intercept.
-                penalties[k] += 0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1))
-
-            # either one of y0 or y1 is zero, or they are both positive or
-            # both negative.
-            else:
-
-                # penalty is the area of a trapezoid of with height x1 - x0,
-                # and with bases y0 and y1
-                penalties[k] += 0.5 * abs(y0 + y1) * (x1 - x0)
-
-            # update left point of line segment
-            x0 = x1
-            y0 = y1
-
-    return penalties
