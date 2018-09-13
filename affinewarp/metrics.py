@@ -8,20 +8,20 @@ from sklearn.utils.validation import check_is_fitted
 from numba import jit
 
 
-def rmse(data, nbins=None):
+def rmse(data, nbins):
     """
     Root-Mean-Squared-Error of trial-average for each neuron.
     """
-    binned = _bin_data(data, nbins)
+    binned = data.bin_spikes(nbins)
     resid = binned - binned.mean(axis=0, keepdims=True)
     return np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
 
 
-def r_squared(data, nbins=None):
+def r_squared(data, nbins):
     """
     Coefficient of determination of trial-average for each neuron.
     """
-    binned = _bin_data(data, nbins)
+    binned = data.bin_spikes(nbins)
     # constant firing rate model
     resid = binned - binned.mean(axis=(0, 1), keepdims=True)
     ss_data = np.sum(resid ** 2, axis=(0, 1))
@@ -116,7 +116,7 @@ def warp_distances(model_1, model_2):
                          "is {}, but number of trials in model_2 "
                          "is {}".format(n_trials, len(model_2.x_knots)))
 
-    new_knots = model_1.n_knots + model_2.n_knots + 4
+    new_knots = model_1.n_knots + model_2.n_knots + 2
     new_x_knots = np.full((n_trials, new_knots), np.nan)
     new_y_knots = np.full((n_trials, new_knots), np.nan)
 
@@ -137,40 +137,56 @@ def warp_distances(model_1, model_2):
 
 @jit(nopython=True)
 def _subtract_piecewise(x1, y1, x2, y2, new_x, new_y):
-    """Subtract two piecewise linear functions."""
-    # initial points.
+    """Subtract two piecewise linear functions.
+
+    Parameters
+    ----------
+    x1 : ndarray
+        x knots for first piecewise function.
+    y1 : ndarray
+        y knots for first piecewise function.
+    x2 : ndarray
+        x knots for second piecewise function.
+    y2 : ndarray
+        y knots for second piecewise function.
+    new_x : ndarray
+        Storage for x knots for the resulting piecewise function.
+    new_y : ndarray
+        Storage for y knots for the resulting piecewise function.
+    """
+    # initial point.
     new_x[0] = 0.0
     new_y[0] = y1[0] - y2[0]
-    new_x[1] = 0.0
-    new_y[1] = y1[0] - y2[0]
 
-    # initial slopes
+    # initial slopes of input functions.
     m1 = (y1[1] - y1[0]) / (x1[1] - x1[0])
     m2 = (y2[1] - y2[0]) / (x2[1] - x2[0])
 
-    i, j, k = 1, 1, 2
-    while i < len(x1) or j < len(x2):
+    # initial slope of resulting function.
+    m = m1 - m2
+
+    i, j, k = 1, 1, 1
+    while (i < len(x1) - 1) or (j < len(x2) - 1):
         if x1[i] < x2[j]:
+            # Add knot at x1 position.
             new_x[k] = x1[i]
-            new_y[k] = y1[i] - (y2[j-1] + m2 * (x1[i] - x2[j-1]))
+            new_y[k] = new_y[k-1] + m * (new_x[k] - new_x[k-1])
             i += 1
             k += 1
             m1 = (y1[i] - y1[i-1]) / (x1[i] - x1[i-1])
-        elif x2[i] < x1[j]:
+            m = m1 - m2
+        else:
+            # Add knot at x2 position.
             new_x[k] = x2[j]
-            new_y[k] = y2[j] - (y1[i-1] + m1 * (x2[j] - x1[i-1]))
+            new_y[k] = new_y[k-1] + m * (new_x[k] - new_x[k-1])
             j += 1
             k += 1
             m2 = (y2[j] - y2[j-1]) / (x2[j] - x2[j-1])
-        else:
-            # x1[i] == x2[j], probably the endpoint.
-            new_x[k] = x1[i]
-            new_y[k] = y1[i] - y2[j]
-            new_x[k+1] = x1[i]
-            new_y[k+1] = y1[i] - y2[j]
-            i += 1
-            j += 1
-            k += 2
+            m = m1 - m2
+
+    # final point.
+    new_x[-1] = 1.0
+    new_y[-1] = y1[-1] - y2[-1]
 
     return new_x, new_y
 
@@ -178,10 +194,24 @@ def _subtract_piecewise(x1, y1, x2, y2, new_x, new_y):
 @jit(nopython=True)
 def _piecewise_integral(x_knots, y_knots, result):
     """Absolute value of integrated piecewise linear function."""
-    for i in range(x_knots.shape[0]):
-        result[i] = 0.0
+    for k in range(x_knots.shape[0]):
+        result[k] = 0.0
+
         for j in range(1, x_knots.shape[1]):
-            base = x_knots[i, j] - x_knots[i, j-1]
-            height = 0.5 * (y_knots[i, j] + y_knots[i, j-1])
-            result[i] += base * height
+
+            # left and right points of line segments.
+            x0 = x_knots[k, j-1]
+            y0 = y_knots[k, j-1]
+            x1 = x_knots[k, j]
+            y1 = y_knots[k, j]
+
+            # if y0 and y1 have opposite signs (area of two triangles)
+            if ((y0 < 0) and (y1 > 0)) or ((y0 > 0) and (y1 < 0)):
+                v = y1 / (y1 - y0)
+                result[k] += 0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1))
+
+            # if y0 and y1 have the same sign (areas of a trapezoid)
+            else:
+                result[k] += 0.5 * abs(y0 + y1) * (x1 - x0)
+
     return result

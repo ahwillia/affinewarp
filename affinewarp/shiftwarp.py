@@ -1,5 +1,6 @@
 import numpy as np
 from numba import jit
+import numba
 from tqdm import trange
 import scipy as sci
 from sklearn.utils.validation import check_is_fitted
@@ -55,9 +56,10 @@ class ShiftWarping(object):
         Fit shift warping to data.
         """
 
-        # TODO - support this?
+        # Check input.
         if isinstance(data, SpikeData):
-            raise NotImplementedError()
+            raise ValueError("Expected input 'data' to be a 3d numpy "
+                             "holding binned spike counts.")
 
         # data dimensions:
         #   K = number of trials
@@ -163,20 +165,27 @@ class ShiftWarping(object):
             _warp_data(data, self.shifts, out)
             return out
 
-    def event_transform(self, times):
-        # TODO(ahwillia): this may be out of date now.
+    def event_transform(self, trials, frac_times):
+        """
+        Time warp events by applying inverse warping functions.
 
-        # check input
+        Parameters
+        ----------
+        trials : array-like
+            Vector of ints holding trial indices for each event.
+        frac_times : array-like
+            Vector of floats holding fractional times for each event
+            (``frac_times[i] == 0`` means that event ``i`` occured at
+            trial start; ``frac_times[i] == 1`` means that event ``i``
+            occured at trial end).
+
+        Returns
+        -------
+        aligned_times : array-like
+            Transformed fractional event times.
+        """
         self.assert_fitted()
-        if not isinstance(times, np.ndarray):
-            raise ValueError('Input must be a ndarray of event times.')
-
-        # check that there is one event per trial
-        if times.shape[0] != len(self.shifts):
-            raise ValueError('Number of trials in the input does not match '
-                             'the number of trials in the fitted model.')
-
-        return times - self.fractional_shifts
+        return np.asarray(frac_times)[trials] - self.fractional_shifts[trials]
 
     def assert_fitted(self):
         check_is_fitted(self, 'shifts')
@@ -269,13 +278,13 @@ def _warp_data(data, shifts, out):
             t += 1
 
 
-@jit(nopython=True)
+@jit(nopython=True, parallel=True)
 def _compute_shifted_loss(data, template, losses):
 
     K, T, N = data.shape
     L = losses.shape[1] // 2
 
-    for k in range(K):
+    for k in numba.prange(K):
         for t in range(T):
             for l in range(-L, L+1):
 
