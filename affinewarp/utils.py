@@ -54,27 +54,6 @@ def check_dimensions(model, data):
     return data, isinstance(data, SpikeData)
 
 
-def _diff_gramian(T, smoothness_scale, l2_scale):
-    """Constructs regularization gramian in least-squares problem.
-    """
-    DtD = np.ones((3, T))
-
-    DtD[-1] = 6.0
-    DtD[-1, 1] = 5.0
-    DtD[-1, 0] = 1.0
-    DtD[-1, -1] = 1.0
-    DtD[-1, -2] = 5.0
-
-    DtD[-2] = -4.0
-    DtD[-2, 1] = -2.0
-    DtD[-2, -1] = -2.0
-
-    DtD *= smoothness_scale
-    DtD[-1] += l2_scale
-
-    return DtD
-
-
 def upsample(signal, factor, axis=-1):
     """Upsamples numpy array by linear interpolation.
     """

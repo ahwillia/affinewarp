@@ -7,7 +7,8 @@ from sklearn.utils.validation import check_is_fitted
 from copy import deepcopy
 
 from .spikedata import SpikeData
-from .utils import _diff_gramian, check_dimensions
+from .utils import check_dimensions
+from ._optimizers import _diff_gramian
 
 
 class ShiftWarping(object):

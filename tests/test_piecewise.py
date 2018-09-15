@@ -1,5 +1,5 @@
 import numpy as np
-from affinewarp.piecewisewarp import warp_penalties
+from affinewarp._optimizers import warp_penalties
 from affinewarp import PiecewiseWarping, SpikeData
 from numpy.testing import assert_allclose, assert_array_equal
 import pytest
