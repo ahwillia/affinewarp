@@ -1,6 +1,7 @@
 import numba
 import numpy as np
 import scipy as sci
+import scipy.optimize
 
 
 class OptimizerFactory:
@@ -67,7 +68,16 @@ def _construct_template_optimizer(loss):
         # ----------------------------------------------- #
         # --- Template Update Rule Under Poisson Loss --- #
         # ----------------------------------------------- #
-        raise NotImplementedError()
+        def f(X, Y, template, data, smoothness_reg_scale, l2_reg_scale):
+
+            # TODO: add smoothing to objective
+
+            # Create objective.
+            obj = PoissonObjective(X, Y, data)
+
+            # Warm start optimization.
+            optimize.minimize(obj, template.ravel(),
+                              jac=True, method='L-BFG-S')
 
     return f
 
@@ -339,6 +349,118 @@ def warp_penalties(X, Y, storage):
     for k in numba.prange(len(X)):
         storage[k] = warp_penalty_one_trial(X[k], Y[k])
     return storage
+
+
+class PoissonObjective:
+
+    def __init__(self, x_knots, y_knots, data):
+        self.x_knots = x_knots
+        self.y_knots = y_knots
+        self.data = data
+
+        # Allocate n_timesteps x n_units matrix holding gradient and a storage
+        # matrix of the same shape for intermediate calculations.
+        self.grad = np.empty(data.shape[1:])
+        self._store = np.empty_like(self.grad)
+
+    def __call__(self, x, data):
+        """Computes objective and caches gradient and hessian."""
+
+        # Reshape optimization parameters to template (T x N matrix).
+        log_fr = x.reshape(self.data.shape[1:])
+        fr = np.exp(log_fr)
+
+        # Zero-out gradient from previous iterations
+        np.fill(0.0, self.grad)
+
+        # Compute Poisson loss and gradient.
+        obj = _poisson_template_loss(self.x_knots, self.y_knots,
+                                     log_fr, fr, self.data, self.grad,
+                                     self._store)
+        return obj, self.grad.ravel()
+
+
+def _poisson_template_loss(X, Y, log_fr, fr, data, grad, storage):
+    K, T, N = data.shape
+    loss = 0.0
+
+    for k in range(K):
+
+        # initialize line segement for interpolation
+        y0 = Y[k, 0]
+        x0 = X[k, 0]
+        slope = (Y[k, 1] - Y[k, 0]) / (X[k, 1] - X[k, 0])
+
+        # 'n' counts knots in piecewise affine warping function.
+        n = 1
+
+        # Warp template according to (x_knots, y_knots) on this trial and
+        # compute loss.
+        for t in range(T):
+
+            # fraction of trial complete
+            x = t / (T - 1)
+
+            # update interpolation point
+            while (n < n_knots-1) and (x > X[k, n]):
+                y0 = Y[k, n]
+                x0 = X[k, n]
+                slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
+                n += 1
+
+            # compute index in warped time
+            wt = y0 + slope * (x - x0)
+
+            if wt <= 0:
+                # poisson loss, start of trial boundary.
+                loss += np.sum(fr[0] - data[k, t] * log_fr[0])
+                storage[t] = fr[0] - data[k, t]
+            elif wt >= 1:
+                # poisson loss, end of trial boundary.
+                loss += fr[-1] - data[k, t] * log_fr[-1]
+                storage[t] = fr[-1] - data[k, t]
+            else:
+                # determine indices into template.
+                wif = wt * (T-1)
+                rem = wif % 1
+                wi = int(wif)
+
+                # interpolated log firing rate and firing rate
+                _lfr = (1-rem) * log_fr[wi] + rem * log_fr[wi+1]
+                _fr = np.exp(_lfr)
+
+                # poisson loss
+                loss += _fr - data[k, t] * _lfr
+                storage[t] = _fr - data[k, t]
+
+        # Compute transposed warping (y_knots, x_knots) of residual matrix
+        # and add contribution to the gradient.
+        for t in range(T):
+
+            # fraction of trial complete
+            x = t / (T - 1)
+
+            # update interpolation point. Note that we swap the x_knots and
+            # y_knots here so that we compute transposed warping.
+            while (n < n_knots-1) and (x > X[k, n]):
+                y0 = x_knots[n]
+                x0 = y_knots[n]
+                slope = (x_knots[n+1] - y0) / (y_knots[n+1] - x0)
+                n += 1
+
+            # compute index in warped time
+            f = y0 + slope*(x - x0)
+
+            if f <= 0:
+                grad[t] += storage[0]
+            elif z >= 1:
+                grad[t] += storage[-1]
+            else:
+                i = f * (T-1)
+                rem = i % 1
+                grad[t] += (1-rem) * storage[int(i)] + rem * storage[int(i + 1)]
+
+    return loss, grad
 
 
 def _diff_gramian(T, smoothness_scale, l2_scale):

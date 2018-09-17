@@ -576,7 +576,7 @@ def densewarp(X, Y, data, out):
         else:
             kk = k
 
-        # iterate over all time bins, stop early if loss is too high.
+        # iterate over all time bins.
         for t in range(T):
 
             # fraction of trial complete

@@ -1,9 +1,13 @@
+"""
+Tests for model performance metrics.
+"""
+
+import pytest
 import numpy as np
 from affinewarp.metrics import warp_distances
 from affinewarp import PiecewiseWarping, ShiftWarping
 from copy import deepcopy
 from numpy.testing import assert_allclose
-import pytest
 
 
 def _rand_model(n_knots, n_trials):
@@ -55,6 +59,7 @@ def test_warp_dist(n_knots):
     model_3.initialize_warps(n_trials)  # set to identity
     pen = warp_penalties(model_1.x_knots, model_1.y_knots, np.empty(n_trials))
     assert_allclose(warp_distances(model_1, model_3), pen)
+
 
 @pytest.mark.parametrize('n_knots', [0, 1, 2])
 def test_warp_dist(n_knots):

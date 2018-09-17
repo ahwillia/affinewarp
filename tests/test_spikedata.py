@@ -1,3 +1,8 @@
+"""
+Tests for SpikeData class.
+"""
+
+import pytest
 import numpy as np
 from affinewarp.spikedata import SpikeData
 from numpy.testing import assert_array_equal
