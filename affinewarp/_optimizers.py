@@ -75,7 +75,11 @@ def _construct_template_optimizer(loss):
                 template = np.mean(data, axis=0)
 
             # Create objective.
-            obj = PoissonObjective(X, Y, data)
+            obj = PoissonObjective(X, Y, data, smoothness_reg_scale, l2_reg_scale)
+
+            ## !!!!!!!!!!!!!!!!! TODO  !!!!!!!!!!!!!!!!!!!!!!!!   ##
+            ## map x_knots and y_knots into sparse matrices. This ##
+            ## will let you handle transposes while staying sane. ##
 
             # Warm start optimization.
             opt = scipy.optimize.minimize(obj, template.ravel(),
@@ -355,7 +359,7 @@ def warp_penalties(X, Y, storage):
 
 class PoissonObjective:
 
-    def __init__(self, x_knots, y_knots, data):
+    def __init__(self, x_knots, y_knots, data, smoothness_scale, l2_scale):
         self.x_knots = x_knots
         self.y_knots = y_knots
         self.data = data.astype(np.float64)
@@ -364,6 +368,16 @@ class PoissonObjective:
         # matrix of the same shape for intermediate calculations.
         self.grad = np.empty(data.shape[1:])
         self._store = np.empty_like(self.grad)
+
+        # Create sparse matrices for smoothing operations.
+        T = data.shape[1]
+        diags = [np.ones(T-2), np.full(T-2, -2), np.ones(T-2)]
+        D = scipy.sparse.spdiags(diags, [0, 1, 2], T-2, T)
+        self.DtD = scipy.sparse.dia_matrix(D.T.dot(D))
+
+        # Store strength of smoothness and L2 regularization strengths.
+        self.smoothness_scale = smoothness_scale
+        self.l2_scale = l2_scale
 
     def __call__(self, x):
         """Computes objective and caches gradient and hessian."""
@@ -379,6 +393,17 @@ class PoissonObjective:
         obj = _poisson_template_loss(self.x_knots, self.y_knots,
                                      log_fr, fr, self.data, self.grad,
                                      self._store)
+
+        # Add smoothness penalty
+        frd = np.diff(fr, 2, axis=0).ravel()
+        obj += .5 * self.smoothness_scale * np.dot(frd, frd) / x.size
+        self.grad += self.smoothness_scale * self.DtD.dot(fr) * fr / x.size
+
+        # Add L2 penalty
+        obj += .5 * self.l2_scale * np.dot(fr.ravel(), fr.ravel()) / x.size
+        self.grad += self.l2_scale * fr * fr / x.size
+
+        # Add contributions of smoothing and l2 regularization to gradient
         return obj, self.grad.ravel()
 
 
@@ -452,7 +477,7 @@ def _poisson_template_loss(X, Y, log_fr, fr, data, grad, storage):
             # fraction of trial complete
             x = t / (T - 1)
 
-            # update interpolation point. Note that we swap the x_knots and
+            # Update interpolation point. Note that we swap the x_knots and
             # y_knots here so that we compute transposed warping.
             while (n < n_knots-1) and (x > Y[k, n]):
                 y0 = X[k, n]
@@ -472,7 +497,7 @@ def _poisson_template_loss(X, Y, log_fr, fr, data, grad, storage):
                 rem = i % 1
                 grad[t] += (1-rem) * storage[int(i)] + rem * storage[int(i + 1)]
 
-    return loss, grad
+    return loss
 
 
 def _diff_gramian(T, smoothness_scale, l2_scale):
