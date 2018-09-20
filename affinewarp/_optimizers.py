@@ -72,20 +72,18 @@ def _construct_template_optimizer(loss):
 
             # TODO: add smoothing to objective
             if template is None:
-                template = np.mean(data, axis=0)
+                template = np.zeros(data.shape[1:])
 
             # Create objective.
             obj = PoissonObjective(X, Y, data, smoothness_reg_scale, l2_reg_scale)
 
-            # # Warm start optimization.
-            # opt = scipy.optimize.minimize(obj, template.ravel(),
-            #                               jac=True, method='L-BFGS-B')
-
             opt = scipy.optimize.minimize(obj, template.ravel(),
-                                          jac=True, hessp=obj.hessp,
-                                          method='newton-cg')
+                                          jac=True, method='L-BFGS-B')
 
-            print(opt.message)
+            # # Fit using Newton's method
+            # opt = scipy.optimize.minimize(obj, template.ravel(),
+            #                               jac=True, hessp=obj.hessp,
+            #                               method='newton-cg')
 
             return (opt.x).reshape(template.shape)
 
@@ -442,8 +440,9 @@ class PoissonObjective:
 
         # Create sparse matrices for smoothing operations.
         diags = [np.ones(T-2), np.full(T-2, -2), np.ones(T-2)]
-        D = scipy.sparse.spdiags(diags, [0, 1, 2], T-2, T)
+        D = scipy.sparse.diags(diags, [0, 1, 2], shape=(T-2, T))
         self.DtD = scipy.sparse.dia_matrix(D.T.dot(D))
+        self.D = D
 
         # Store strength of smoothness and L2 regularization strengths.
         self.smoothness_scale = smoothness_scale
@@ -469,6 +468,24 @@ class PoissonObjective:
             exp_wX = np.exp(wX)
             obj += exp_wX.sum() - np.dot(Y.ravel(), wX.ravel())
             self.grad += w.T.dot(exp_wX - Y)
+
+        obj /= self.data.size
+        self.grad /= self.data.size
+
+        # Add smoothness penalty
+        exp_X = np.exp(X)
+        DtD_expX = self.DtD.dot(exp_X)
+        d = np.dot(exp_X.T, DtD_expX).ravel()
+        smooth_reg = (.5 * self.smoothness_scale / x.size) * np.dot(d, d)
+        smooth_grad = (self.smoothness_scale / x.size) * DtD_expX * exp_X
+
+        obj += smooth_reg
+        self.grad += smooth_grad
+
+        # # Add smoothness penalty
+        # d = np.diff(X, 2, axis=0).ravel()
+        # obj += .5 * self.smoothness_scale * np.dot(d, d) / x.size
+        # self.grad += self.smoothness_scale * self.DtD.dot(exp_X) * exp_X / x.size
 
         # # Add smoothness penalty
         # fr = np.exp(log_fr)
