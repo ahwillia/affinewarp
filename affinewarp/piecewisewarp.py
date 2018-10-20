@@ -1,7 +1,6 @@
 """Defines core functionality of Piecewise Linear Time Warping models."""
 
 import numpy as np
-import scipy as sci
 from numba import jit
 import numba
 from tqdm import trange, tqdm
@@ -9,7 +8,10 @@ from sklearn.utils.validation import check_is_fitted
 
 from .spikedata import SpikeData
 from .shiftwarp import ShiftWarping
-from .utils import _diff_gramian, check_dimensions
+from .utils import check_dimensions
+
+from ._optimizers import OptimizerFactory, warp_penalties
+optimizer_factory = OptimizerFactory()
 
 _DATA_ERROR = ValueError("'data' must be provided as a dense numpy array "
                          "(neurons x timepoints x trials) holding binned "
@@ -32,7 +34,8 @@ class PiecewiseWarping(object):
     """
 
     def __init__(self, n_knots=0, warp_reg_scale=0.0, smoothness_reg_scale=0.0,
-                 l2_reg_scale=1e-4, min_temp=-2, max_temp=0, n_restarts=1):
+                 l2_reg_scale=1e-7, min_temp=-2, max_temp=0, n_restarts=1,
+                 loss='quadratic'):
         """
         Parameters
         ----------
@@ -68,6 +71,12 @@ class PiecewiseWarping(object):
         self.n_restarts = n_restarts
         self.template = None
         self.loss_hist = []
+
+        self.loss = loss
+        funcs = optimizer_factory(loss)
+        self._template_optimizer = funcs[0]
+        self._warp_optimizer = funcs[1]
+        self._eval_loss = funcs[2]
 
     def _mutate_knots(self, temperature):
         """
@@ -132,7 +141,7 @@ class PiecewiseWarping(object):
                              "of trials.")
 
     def fit(self, data, iterations=50, warp_iterations=200, fit_template=True,
-            verbose=True, init_warps=None, overwrite_loss_hist=True,
+            verbose=True, init_warps=None, overwrite_hist=True,
             record_knots=False):
         """
         Fits warping functions and model template to data.
@@ -175,9 +184,7 @@ class PiecewiseWarping(object):
 
         # Allocate storage for loss.
         K, T, N = data.shape
-        self._initialize_storage(K)
-        if overwrite_loss_hist:
-            self.loss_hist = []
+        self._initialize_storage(K, overwrite_hist)
 
         # Ensure template is initialized.
         if fit_template or (self.template is None):
@@ -197,7 +204,7 @@ class PiecewiseWarping(object):
             if record_knots:
                 self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
 
-    def _fit_warps(self, data, iterations=20):
+    def _fit_warps(self, data, iterations):
         """Fit warping functions by local random search.
 
         Parameters
@@ -208,10 +215,10 @@ class PiecewiseWarping(object):
             Number of iterations to optimize warps.
         """
         storage = np.empty((data.shape[0], 4, self.n_knots + 2))
-        _fit_warps_all_trials(self.x_knots, self.y_knots, self.template, data,
-                              self.warp_reg_scale, self._losses,
-                              self._penalties, iterations, self.n_restarts,
-                              self.min_temp, self.max_temp, storage)
+        self._warp_optimizer(self.x_knots, self.y_knots, self.template, data,
+                             self.warp_reg_scale, self._losses,
+                             self._penalties, iterations, self.n_restarts,
+                             self.min_temp, self.max_temp, storage)
 
     def _fit_template(self, data):
         """Fit warping template.
@@ -221,24 +228,9 @@ class PiecewiseWarping(object):
         data : ndarray
             3d array (trials x times x features) holding time series to be fit.
         """
-        K = data.shape[0]
-        T = data.shape[1]
-
-        # Initialize gramians based on regularization.
-        if self.smoothness_reg_scale > 0:
-            WtW = _diff_gramian(
-                T, self.smoothness_reg_scale * K, self.l2_reg_scale)
-        else:
-            WtW = np.zeros((2, T))
-
-        # Compute gramians.
-        WtX = np.zeros((T, data.shape[-1]))
-        _fast_template_grams(WtW[-2:], WtX, data, self.x_knots, self.y_knots)
-
-        # Solve WtW * template = WtX
-        self.template = sci.linalg.solveh_banded(WtW, WtX)
-
-        return self.template
+        self.template = self._template_optimizer(
+            self.x_knots, self.y_knots, self.template, data,
+            self.smoothness_reg_scale, self.l2_reg_scale)
 
     def predict(self):
         """
@@ -480,15 +472,14 @@ class PiecewiseWarping(object):
         self.y_knots = np.column_stack([intercepts, intercepts + slopes])
 
         # find best template given these knots and compute model loss
+        self._initialize_storage(data.shape[0], True)
         self._fit_template(data)
-        self._losses = np.zeros(data.shape[0])
-        self.loss_hist = []
         self._record_loss(data)
 
     def assert_fitted(self):
         check_is_fitted(self, ('x_knots', 'y_knots', 'template'))
 
-    def _initialize_storage(self, n_trials):
+    def _initialize_storage(self, n_trials, overwrite_hist):
         """
         Initializes arrays to hold loss per trial.
         """
@@ -496,278 +487,22 @@ class PiecewiseWarping(object):
         self._penalties = np.zeros(n_trials)
         self._new_losses = np.empty(n_trials)
         self._new_penalties = np.empty(n_trials)
+        if overwrite_hist:
+            self.loss_hist = []
+            self.penalty_hist = []
+            self.objective_hist = []
 
     def _record_loss(self, data):
-        """
-        Computes overall objective function and appends to self.loss_hist
-        """
-        # update reconstruction and evaluate loss
-        self._losses.fill(0.0)
-        warp_with_quadloss(self.x_knots, self.y_knots, self.template,
-                           self._losses, self._losses, data, early_stop=False)
-
-        # add warping penalty to losses
-        if self.warp_reg_scale > 0:
-            self._losses += self._penalties
-
-        # store objective function over time
+        # Compute and record reconstruction loss.
+        self._eval_loss(self.x_knots, self.y_knots, self.template, data, self._losses)
         self.loss_hist.append(self._losses.mean())
 
+        # Compute and record warping penalties.
+        warp_penalties(self.x_knots, self.y_knots, self._penalties)
+        self.penalty_hist.append(self._penalties.mean() * self.warp_reg_scale)
 
-@jit(nopython=True, parallel=True)
-def _fit_warps_all_trials(x_knots, y_knots, template, data, warp_reg_scale,
-                          losses, penalties, iterations, n_restarts,
-                          min_temp, max_temp, storage):
-
-    for k in numba.prange(x_knots.shape[0]):
-        new_loss, new_pen = _fit_warping_knots(
-            x_knots[k], y_knots[k],  # initial guess
-            template, data[k],  # warping template and target
-            warp_reg_scale, iterations,  # params for random search
-            n_restarts, min_temp, max_temp,  # more params
-            storage[k, 0], storage[k, 1],
-            storage[k, 2], storage[k, 3]
-        )
-        losses[k] = new_loss
-        penalties[k] = new_pen
-
-
-@jit(nopython=True)
-def _fast_template_grams(WtW, WtX, data, X, Y):
-    """
-    Compute Gram matrices for template update least-squares problem.
-    """
-
-    K, T, N = data.shape
-    n_knots = X.shape[1]
-
-    # iterate over trials
-    for k in range(len(X)):
-
-        # initialize line segement for interpolation
-        y0 = Y[k, 0]
-        x0 = X[k, 0]
-        slope = (Y[k, 1] - Y[k, 0]) / (X[k, 1] - X[k, 0])
-
-        # 'n' counts knots in piecewise affine warping function.
-        n = 1
-
-        # iterate over time bins
-        for t in range(T):
-
-            # fraction of trial complete
-            x = t / (T - 1)
-
-            # update interpolation point
-            while (n < n_knots-1) and (x > X[k, n]):
-                y0 = Y[k, n]
-                x0 = X[k, n]
-                slope = (Y[k, n+1] - y0) / (X[k, n+1] - x0)
-                n += 1
-
-            # compute index in warped time
-            z = y0 + slope*(x - x0)
-
-            if z >= 1:
-                WtX[-1] += data[k, t]
-                WtW[1, -1] += 1.0
-
-            elif z <= 0:
-                WtX[0] += data[k, t]
-                WtW[1, 0] += 1.0
-
-            else:
-                i = int(z * (T-1))
-                lam = (z * (T-1)) % 1
-
-                WtX[i] += (1-lam) * data[k, t]
-                WtW[1, i] += (1-lam)**2
-                WtW[1, i+1] += lam**2
-                WtW[0, i+1] += (1-lam) * lam
-                WtX[i+1] += lam * data[k, t]
-
-
-@jit(nopython=True, nogil=True)
-def _fit_warping_knots(x_knots, y_knots, template, data, warp_reg_scale,
-                       iterations, n_restarts, min_temp, max_temp, curr_x,
-                       curr_y, next_x, next_y):
-
-    # Problem dimensions.
-    n_knots = len(x_knots)
-
-    # Compute initial loss and warping penalty. This is the best seen so far.
-    best_loss, best_penalty = assess_warp(x_knots, y_knots, template,
-                                          data, warp_reg_scale)
-    best_obj = best_loss + best_penalty
-
-    # Initialize to current warping knots
-    for i in range(n_knots):
-        curr_x[i] = x_knots[i]
-        curr_y[i] = y_knots[i]
-
-    # Loss for identity warp (mean squared error across neurons and trials).
-    identity_loss = _quad_loss(data.ravel(), template.ravel()) / data.size
-
-    # Do multiple random searches with refined proposal distribution.
-    for start in range(n_restarts + 1):
-
-        # First iteration starts from last set of knots. All subsequent
-        # restarts start from identity warp.
-        if start > 0:
-            curr_loss = identity_loss
-            curr_penalty = 0.0
-            curr_obj = curr_loss
-            for i, f in enumerate(np.linspace(0, 1, n_knots)):
-                curr_x[i] = f
-                curr_y[i] = f
-        else:
-            curr_loss = best_loss
-            curr_penalty = best_penalty
-            curr_obj = best_obj
-
-        # Random search with exponentially decaying temperature.
-        for logtemp in np.linspace(min_temp, max_temp, iterations):
-            temperature = 10 ** logtemp
-
-            # Perturb x_knots and y_knots
-            for i in range(n_knots):
-                next_x[i] = curr_x[i] + temperature * np.random.randn()
-                next_y[i] = curr_y[i] + temperature * np.random.randn()
-
-            # Sort x_knots and y_knots inplace (enforce a monotically
-            # increasing warping function).
-            next_x.sort()
-            next_y.sort()
-
-            # Normalize x_knots to start at zero and end at one.
-            next_x = next_x - next_x[0]
-            next_x = next_x / next_x[-1]
-
-            # Compute loss for the proposed warping knots.
-            next_loss, next_penalty = assess_warp(next_x, next_y, template,
-                                                  data, warp_reg_scale)
-            next_obj = next_loss + next_penalty
-
-            # Accept or reject next warping knots within this restart.
-            if next_obj < curr_obj:
-                curr_loss = next_loss
-                curr_penalty = next_penalty
-                curr_obj = next_obj
-                for i in range(n_knots):
-                    curr_x[i] = next_x[i]
-                    curr_y[i] = next_y[i]
-
-            # Save current warping knots if they're the best we've seen.
-            if curr_obj < best_obj:
-                best_loss = curr_loss
-                best_penalty = curr_penalty
-                best_obj = curr_obj
-                for i in range(n_knots):
-                    x_knots[i] = curr_x[i]
-                    y_knots[i] = curr_y[i]
-
-    return best_loss, best_penalty
-
-
-@jit(nopython=True, nogil=True)
-def assess_warp(X, Y, template, data, warp_reg_scale):
-    # -----------------------------
-    # -- Compute Warping Penalty --
-    # -----------------------------
-
-    penalty = 0.0
-
-    # left point of line segment.
-    x0 = X[0]
-    y0 = Y[0]
-
-    for j in range(1, len(X)):
-
-        # right point of line segment
-        x0 = X[int(j-1)]
-        y0 = Y[int(j-1)] - x0  # subtract off identity warp.
-        x1 = X[int(j)]
-        y1 = Y[int(j)] - x1  # subtract off identity warp.
-
-        # If y0 and y1 have opposite signs, penalty is the area of two
-        # right triangles. The height of the right triangles is y0 and
-        # y1. The base of the right triangles is given by the x-intercept.
-        if ((y0 < 0) and (y1 > 0)) or ((y0 > 0) and (y1 < 0)):
-            v = y1 / (y1 - y0)
-            penalty += 0.5 * (x1-x0) * ((1-v)*abs(y0) + v*abs(y1))
-
-        # Otherwise, either one of y0 or y1 is zero, or they are both
-        # positive or both negative. The penalty is the area of a trapezoid,
-        # which has height x1-x0 and bases y0 and y1.
-        else:
-            penalty += 0.5 * abs(y0 + y1) * (x1 - x0)
-
-        # update left point of line segment.
-        x0 = x1
-        y0 = y1
-
-    # ----------------------------------
-    # -- Compute Reconstruction Error --
-    # ----------------------------------
-    loss = 0.0
-
-    # initialize line segement for interpolation
-    slope = (Y[1] - Y[0]) / (X[1] - X[0])
-    x0 = X[0]
-    y0 = Y[0]
-
-    # 'n' counts knots in piecewise affine warping function.
-    n = 1
-
-    # iterate over time bins
-    for t in range(len(data)):
-
-        # fraction of trial complete
-        x = t / (len(data) - 1)
-
-        # update interpolation point
-        while (n < len(X)-1) and (x > X[n]):
-            y0 = Y[n]
-            x0 = X[n]
-            slope = (Y[n+1] - y0) / (X[n+1] - x0)
-            n += 1
-
-        # compute index in warped time
-        z = y0 + slope*(x - x0)
-
-        # clip warp interpolation between zero and one
-        if z <= 0:
-            loss += _quad_loss(template[0], data[t])
-
-        elif z >= 1:
-            loss += _quad_loss(template[-1], data[t])
-
-        # do linear interpolation
-        else:
-            j = z * (len(data) - 1)
-            rem = j % 1
-            loss += _interp_quad_loss(
-                rem, template[int(j)], template[int(j)+1], data[t]
-            )
-
-    return loss / data.size, warp_reg_scale * penalty
-
-
-@jit(nopython=True)
-def _quad_loss(pred, targ):
-    result = 0.0
-    for i in range(pred.size):
-        result += (pred[i] - targ[i])**2
-    return result
-
-
-@jit(nopython=True)
-def _interp_quad_loss(a, y1, y2, targ):
-    result = 0.0
-    b = 1 - a
-    for i in range(y1.size):
-        result += (b*y1[i] + a*y2[i] - targ[i])**2
-    return result
+        # Record total objective history.
+        self.objective_hist.append(self.loss_hist[-1] + self.penalty_hist[-1])
 
 
 @jit(nopython=True)
@@ -840,7 +575,7 @@ def densewarp(X, Y, data, out):
         else:
             kk = k
 
-        # iterate over all time bins, stop early if loss is too high.
+        # iterate over all time bins.
         for t in range(T):
 
             # fraction of trial complete

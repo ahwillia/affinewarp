@@ -1,3 +1,7 @@
+"""
+Tests for ShiftWarping models.
+"""
+
 import numpy as np
 from affinewarp.shiftwarp import _fill_WtW
 

@@ -1,11 +1,19 @@
+"""
+Tests to check that piecewise warps are transforming data as expected.
+"""
+
+import pytest
 import numpy as np
-from affinewarp.piecewisewarp import warp_penalties
+from affinewarp._optimizers import warp_penalties
 from affinewarp import PiecewiseWarping, SpikeData
 from numpy.testing import assert_allclose, assert_array_equal
-import pytest
 
 
 def test_monotonic_knots():
+    """
+    Test that warping functions remain monotonically increasing during random
+    search.
+    """
     model = PiecewiseWarping()
     data = np.random.randn(100, 101, 102)
     model.fit(data, iterations=1, verbose=False)
@@ -17,8 +25,12 @@ def test_monotonic_knots():
 
 
 def test_warp_penalties():
+    """
+    Test that regularization on the warping functions (penalizing distance
+    from identity) is correctly computed for some simple cases.
+    """
 
-    # identity warp should produce zero penalty
+    # Identity warp should produce zero penalty
     for n in range(2, 10):
         X = np.linspace(0, 1, 10)
         Y = np.linspace(0, 1, 10)
@@ -28,7 +40,7 @@ def test_warp_penalties():
 
         assert_allclose(actual, expected, atol=1e-8)
 
-    # warp shifted by s should produce penalty s
+    # Warp shifted by s should produce penalty s
     for s in (-.5, .5):
         for n in range(2, 10):
             X = np.linspace(0, 1, n)
@@ -61,6 +73,9 @@ def test_warp_penalties():
 
 
 def test_identity_transform():
+    """
+    Test that identity warping functions do not change spike times.
+    """
 
     # dense data
     model = PiecewiseWarping()
@@ -79,6 +94,11 @@ def test_identity_transform():
 
 @pytest.mark.parametrize('s', [.5, 1.0, 2.0])
 def test_scaling(s):
+    """
+    Test that linear warps with different slopes appropriately scale spike
+    times.
+    """
+
     # Create random dataset.
     K, T, N = 10, 11, 12
     k, t, n = np.where(np.random.randn(K, T, N) > 1.5)
