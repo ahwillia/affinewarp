@@ -34,7 +34,7 @@ class PiecewiseWarping(object):
     """
 
     def __init__(self, n_knots=0, warp_reg_scale=0.0, smoothness_reg_scale=0.0,
-                 l2_reg_scale=1e-4, min_temp=-2, max_temp=0, n_restarts=1,
+                 l2_reg_scale=1e-7, min_temp=-2, max_temp=0, n_restarts=1,
                  loss='quadratic'):
         """
         Parameters
@@ -472,9 +472,8 @@ class PiecewiseWarping(object):
         self.y_knots = np.column_stack([intercepts, intercepts + slopes])
 
         # find best template given these knots and compute model loss
+        self._initialize_storage(data.shape[0], True)
         self._fit_template(data)
-        self._losses = np.zeros(data.shape[0])
-        self.loss_hist = []
         self._record_loss(data)
 
     def assert_fitted(self):

@@ -1,14 +1,13 @@
 import numpy as np
-from numba import jit
 import numba
 from tqdm import trange
 import scipy as sci
 from sklearn.utils.validation import check_is_fitted
-from copy import deepcopy
+import scipy.optimize
 
 from .spikedata import SpikeData
 from .utils import check_dimensions
-from ._optimizers import _diff_gramian
+from ._optimizers import _diff_gramian, PoissonObjective
 
 
 class ShiftWarping(object):
@@ -27,7 +26,7 @@ class ShiftWarping(object):
     """
 
     def __init__(self, maxlag=.5, warp_reg_scale=0, smoothness_reg_scale=0,
-                 l2_reg_scale=1e-4):
+                 l2_reg_scale=1e-4, loss='quadratic'):
         """Initializes ShiftWarping object with hyperparameters.
 
         Parameters
@@ -51,6 +50,12 @@ class ShiftWarping(object):
         self.warp_reg_scale = warp_reg_scale
         self.smoothness_reg_scale = smoothness_reg_scale
         self.l2_reg_scale = l2_reg_scale
+        self.loss = loss
+
+        if loss == 'quadratic':
+            self._shifted_loss = _compute_shifted_quad_loss
+        elif loss == 'poisson':
+            self._shifted_loss = _compute_shifted_poiss_loss
 
     def fit(self, data, iterations=10, verbose=True, warp_iterations=None):
         """
@@ -72,16 +77,8 @@ class ShiftWarping(object):
         self.shifts = np.zeros(K, dtype=int)
         L = int(self.maxlag * T)
 
-        # compute gramian for regularization term
-        DtD = _diff_gramian(
-            T, self.smoothness_reg_scale * K, self.l2_reg_scale)
-
         # initialize template
-        WtW = np.zeros((3, T))
-        WtX = np.zeros((T, N))
-        _fill_WtW(self.shifts, WtW[-1])
-        _fill_WtX(data, self.shifts, WtX)
-        self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
+        self._fit_template(data)
 
         # penalize warps by distance from identity
         warp_penalty = self.warp_reg_scale * \
@@ -97,7 +94,7 @@ class ShiftWarping(object):
 
             # compute the loss for each shift
             losses.fill(0.0)
-            _compute_shifted_loss(data, self.template, losses)
+            self._shifted_loss(data, self.template, losses)
             losses /= (T * N)
 
             # find the best shift for each trial
@@ -113,17 +110,36 @@ class ShiftWarping(object):
             if verbose:
                 pbar.set_description('Loss: {0:.2f}'.format(total_loss))
 
-            # update template
-            WtW.fill(0.0)
-            WtX.fill(0.0)
-
-            _fill_WtW(self.shifts, WtW[-1])
-            _fill_WtX(data, self.shifts, WtX)
-
-            self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
+            self._fit_template(data)
 
         # compute shifts as a fraction of trial length
         self.fractional_shifts = self.shifts / T
+
+    def _fit_template(self, data):
+        K, T, N = data.shape
+
+        if self.loss == 'quadratic':
+            DtD = .5 * K * _diff_gramian(T, self.smoothness_reg_scale, self.l2_reg_scale)
+            WtW = np.zeros((3, T))
+            WtX = np.zeros((T, N))
+            _fill_WtW(self.shifts, WtW[-1])
+            _fill_WtX(data, self.shifts, WtX)
+            self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
+
+        elif self.loss == 'poisson':
+            # Get initial parameters.
+            try:
+                x0 = self.template.ravel()
+            except AttributeError:
+                x0 = np.zeros(T * N)
+
+            # Set up optimization problem.
+            obj = PoissonObjective(data, self.smoothness_reg_scale,
+                                   self.l2_reg_scale, shifts=self.shifts)
+
+            # Fit template.
+            opt = scipy.optimize.minimize(obj, x0, jac=True, hessp=obj.hessp, method='newton-cg')
+            self.template = (opt.x).reshape(T, N)
 
     def argsort_warps(self):
         """
@@ -188,11 +204,23 @@ class ShiftWarping(object):
         self.assert_fitted()
         return np.asarray(frac_times)[trials] - self.fractional_shifts[trials]
 
+    def copy_fit(self, model):
+        """
+        Applies inverse warping functions to align raw data across trials.
+        """
+        if not isinstance(model, ShiftWarping):
+            raise ValueError("Can only copy another ShiftWarping instance.")
+        model.assert_fitted()
+        self.template = model.template.copy()
+        self.shifts = model.shifts
+        self.fractional_shifts = model.fractional_shifts
+        return self
+
     def assert_fitted(self):
         check_is_fitted(self, 'shifts')
 
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def _predict(template, shifts, out):
     """
     Produces model prediction. Applies shifts to template on each trial.
@@ -229,7 +257,7 @@ def _predict(template, shifts, out):
             t += 1
 
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def _fill_WtW(shifts, out):
     T = len(out)
     for s in shifts:
@@ -243,7 +271,7 @@ def _fill_WtW(shifts, out):
                 out[i] += 1
 
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def _fill_WtX(data, shifts, out):
     K, T, N = data.shape
     for k in range(K):
@@ -260,7 +288,7 @@ def _fill_WtX(data, shifts, out):
             i += 1
 
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def _warp_data(data, shifts, out):
     K, T, N = data.shape
     for k in range(K):
@@ -279,8 +307,8 @@ def _warp_data(data, shifts, out):
             t += 1
 
 
-@jit(nopython=True, parallel=True)
-def _compute_shifted_loss(data, template, losses):
+@numba.jit(nopython=True, parallel=True)
+def _compute_shifted_quad_loss(data, template, losses):
 
     K, T, N = data.shape
     L = losses.shape[1] // 2
@@ -299,3 +327,27 @@ def _compute_shifted_loss(data, template, losses):
                 # quadratic loss
                 for n in range(N):
                     losses[k, l+L] += (data[k, t, n] - template[i, n])**2
+
+
+@numba.jit(nopython=True, parallel=True)
+def _compute_shifted_poiss_loss(data, template, losses):
+
+    K, T, N = data.shape
+    L = losses.shape[1] // 2
+
+    exp_template = np.exp(template)
+
+    for k in numba.prange(K):
+        for t in range(T):
+            for l in range(-L, L+1):
+
+                # shifted index
+                i = t - l
+                if i < 0:
+                    i = 0
+                elif i >= T:
+                    i = T-1
+
+                # poisson loss
+                for n in range(N):
+                    losses[k, l+L] += exp_template[i, n] - template[i, n] * data[k, t, n]

@@ -49,17 +49,16 @@ def _construct_template_optimizer(loss):
         # ------------------------------------------------- #
         # --- Template Update Rule Under Quadratic Loss --- #
         # ------------------------------------------------- #
-        def f(X, Y, template, data, smoothness_reg_scale, l2_reg_scale):
+        def f(x_knots, y_knots, template, data, smoothness_reg_scale, l2_reg_scale):
             K = data.shape[0]
             T = data.shape[1]
 
             # Initialize WtW with regularization term
-            WtW = _diff_gramian(T, smoothness_reg_scale * K,
-                                l2_reg_scale + 1e-4)
+            WtW = _diff_gramian(T, smoothness_reg_scale * K, l2_reg_scale * K)
 
             # Compute gramians.
             WtX = np.zeros((T, data.shape[-1]))
-            _fast_template_grams(WtW[-2:], WtX, data, X, Y)
+            _fast_template_grams(WtW[-2:], WtX, data, x_knots, y_knots)
 
             # Solve WtW * template = WtX
             return sci.linalg.solveh_banded(WtW, WtX)
@@ -68,14 +67,15 @@ def _construct_template_optimizer(loss):
         # ----------------------------------------------- #
         # --- Template Update Rule Under Poisson Loss --- #
         # ----------------------------------------------- #
-        def f(X, Y, template, data, smoothness_reg_scale, l2_reg_scale):
+        def f(x_knots, y_knots, template, data, smoothness_reg_scale, l2_reg_scale):
 
-            # TODO: add smoothing to objective
+            # Initialize template. Otherwise, warm-start from last result.
             if template is None:
                 template = np.zeros(data.shape[1:])
 
             # Create objective.
-            obj = PoissonObjective(X, Y, data, smoothness_reg_scale, l2_reg_scale)
+            obj = PoissonObjective(data, smoothness_reg_scale, l2_reg_scale,
+                                   x_knots=x_knots, y_knots=y_knots)
 
             opt = scipy.optimize.minimize(obj, template.ravel(),
                                           jac=True, method='L-BFGS-B')
@@ -84,6 +84,7 @@ def _construct_template_optimizer(loss):
             # opt = scipy.optimize.minimize(obj, template.ravel(),
             #                               jac=True, hessp=obj.hessp,
             #                               method='newton-cg')
+            print(opt.message)
 
             return (opt.x).reshape(template.shape)
 
@@ -415,23 +416,39 @@ def warp_to_sparse_matrix(X, Y, rows, cols, vals):
 
 class PoissonObjective:
 
-    def __init__(self, x_knots, y_knots, data, smoothness_scale, l2_scale):
+    def __init__(self, data, smoothness_scale, l2_scale,
+                 x_knots=None, y_knots=None, shifts=None):
         # Store dataset
         self.data = data.astype(np.float64)
 
         # Create sparse matrices representing warping functions.
         K, T, N = data.shape
 
+        # Represent warping functions as sparse matrices.
         self.W = []
-        for x, y in zip(x_knots, y_knots):
-            rows = np.empty((T, 2)).astype(int)
-            cols = np.empty((T, 2)).astype(int)
-            vals = np.empty((T, 2))
-            warp_to_sparse_matrix(x, y, rows, cols, vals)
-            Wk = scipy.sparse.csr_matrix(
-                (vals.ravel(), (rows.ravel(), cols.ravel())), shape=(T, T)
-            )
-            self.W.append(Wk)
+
+        if shifts is not None:
+            # ShiftWarping models.
+            rows = np.arange(T)
+            vals = np.ones(T)
+            for s in shifts:
+                cols = np.clip(rows + s, 0, T - 1)
+                Wk = scipy.sparse.csr_matrix(
+                    (vals.ravel(), (rows.ravel(), cols.ravel())), shape=(T, T)
+                )
+                self.W.append(Wk)
+
+        else:
+            # PiecewiseWarping models.
+            for x, y in zip(x_knots, y_knots):
+                rows = np.empty((T, 2)).astype(int)
+                cols = np.empty((T, 2)).astype(int)
+                vals = np.empty((T, 2))
+                warp_to_sparse_matrix(x, y, rows, cols, vals)
+                Wk = scipy.sparse.csr_matrix(
+                    (vals.ravel(), (rows.ravel(), cols.ravel())), shape=(T, T)
+                )
+                self.W.append(Wk)
 
         # Allocate n_timesteps x n_units matrix holding gradient and a storage
         # matrix of the same shape for intermediate calculations.
@@ -445,8 +462,8 @@ class PoissonObjective:
         self.D = D
 
         # Store strength of smoothness and L2 regularization strengths.
-        self.smoothness_scale = smoothness_scale
-        self.l2_scale = l2_scale
+        self.smoothness_scale = smoothness_scale * K
+        self.l2_scale = l2_scale * K
 
     def __call__(self, x):
         """Computes objective and caches gradient and hessian."""
@@ -466,36 +483,20 @@ class PoissonObjective:
         for Y, w in zip(self.data, self.W):
             wX = w.dot(X)
             exp_wX = np.exp(wX)
-            obj += exp_wX.sum() - np.dot(Y.ravel(), wX.ravel())
+            obj += (exp_wX.sum() - np.dot(Y.ravel(), wX.ravel()))
             self.grad += w.T.dot(exp_wX - Y)
-
-        obj /= self.data.size
-        self.grad /= self.data.size
 
         # Add smoothness penalty
         exp_X = np.exp(X)
         DtD_expX = self.DtD.dot(exp_X)
-        d = np.dot(exp_X.T, DtD_expX).ravel()
-        smooth_reg = (.5 * self.smoothness_scale / x.size) * np.dot(d, d)
-        smooth_grad = (self.smoothness_scale / x.size) * DtD_expX * exp_X
+        d = self.D.dot(exp_X)
+        obj += .5 * self.smoothness_scale * np.dot(d.ravel(), d.ravel())
+        self.grad += self.smoothness_scale * DtD_expX * exp_X
 
-        obj += smooth_reg
-        self.grad += smooth_grad
-
-        # # Add smoothness penalty
-        # d = np.diff(X, 2, axis=0).ravel()
-        # obj += .5 * self.smoothness_scale * np.dot(d, d) / x.size
-        # self.grad += self.smoothness_scale * self.DtD.dot(exp_X) * exp_X / x.size
-
-        # # Add smoothness penalty
-        # fr = np.exp(log_fr)
-        # frd = np.diff(fr, 2, axis=0).ravel()
-        # obj += .5 * self.smoothness_scale * np.dot(frd, frd) / x.size
-        # self.grad += self.smoothness_scale * self.DtD.dot(fr) * fr / x.size
-
-        # # Add L2 penalty
-        # obj += .5 * self.l2_scale * np.dot(fr.ravel(), fr.ravel()) / x.size
-        # self.grad += self.l2_scale * fr * fr / x.size
+        # Add L2 penalty
+        exp_X2 = exp_X ** 2
+        obj += .5 * self.l2_scale * exp_X2.sum()
+        self.grad += self.l2_scale * exp_X2
 
         # Add contributions of smoothing and l2 regularization to gradient
         return obj, self.grad.ravel()
@@ -513,6 +514,13 @@ class PoissonObjective:
             WZ = Wk.dot(Z)
             exp_WX = np.exp(WX)
             self.hess_out += Wk.T.dot(exp_WX * WZ)
+
+        Z_exp_X = Z * np.exp(X)
+        self.hess_out += Z_exp_X * self.DtD.dot(X) + X * self.DtD.dot(X)
+
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
+        # TODO: add contribution from l2 #
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 
         return self.hess_out.ravel()
 

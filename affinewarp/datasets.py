@@ -1,12 +1,81 @@
 """Simple datasets for testing functionality."""
 
+from .piecewisewarp import PiecewiseWarping
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 
 
-# TODO(poolio)
-# ------------
-# Add function that generates spikes from piecewise linear time warped process.
-# Could also just generate binned spike counts.
+def piecewise_warped_data(
+        n_trials=120, n_timepoints=100, n_neurons=50, n_knots=1,
+        knot_mutation_scale=0.1, clip_y_knots=True, template_amplitude=1.0,
+        template_base=0.0, template_smoothness=2.0, noise_type="poisson",
+        noise_scale=0.1, seed=1234):
+    """Generates data from the PiecewiseWarping model.
+
+    Parameters
+    ----------
+    n_trials : int
+        Number of trials in synthetic data.
+    n_timepoints : int
+        Number of timepoints per trial.
+    n_neurons : int
+        Number of neurons/features in the time series.
+    n_knots : int
+        Number of knots in the warping function.
+    knot_mutation_scale : float
+        Scale of noise added to warping function knots.
+    clip_y_knots : bool
+        If True, clip y coordinates on warping functions between zero and one.
+    template_amplitude : float
+        Max value (before smoothing) of ground-truth model template.
+    template_base : float
+        Min value of ground-truth model template.
+    template_smoothness : float
+        Width of Gaussian smoothing on model template.
+    noise_type : str
+        Either "poisson" or "gaussian", specifies type of noise applied to warped
+        template on every trial.
+    noise_scale : float
+        If noise_type == "gaussian" this is the standard deviation of noise.
+    seed : int
+        Used to initialize RandomState instance.
+
+    Returns
+    -------
+    data : ndarray (trials x timepoints x features)
+        Collection of time series.
+    model : PiecewiseWarping
+        Ground truth model.
+    """
+
+    # Initialize random state
+    rs = np.random.RandomState(seed)
+
+    # Create ground-truth model.
+    model = PiecewiseWarping(n_knots=n_knots)
+
+    # Initialize warping knots.
+    model.initialize_warps(n_trials)
+    model.x_knots, model.y_knots = model._mutate_knots(knot_mutation_scale)
+    if clip_y_knots:
+        model.y_knots[:, 0] = 0.
+        model.y_knots[:, -1] = 1.
+
+    # Initialize template.
+    template_shape = n_timepoints, n_neurons
+    template = rs.uniform(
+        template_base, template_base + template_amplitude, size=template_shape)
+    template = gaussian_filter1d(template, template_smoothness, axis=0)
+    model.template = template
+
+    # Generate data
+    data = model.predict()
+    if noise_type == 'poisson':
+        data = rs.poisson(data)
+    elif noise_type == 'gaussian':
+        data += rs.normal(loc=0.0, scale=noise_scale)
+
+    return data, model
 
 
 def jittered_data(t=None, feature=None, n_trial=61, jitter=1, gain=0,
