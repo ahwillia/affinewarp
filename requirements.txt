@@ -3,7 +3,4 @@ scipy
 matplotlib
 numba
 tqdm
-sparse
 sklearn
-joblib
-cma
