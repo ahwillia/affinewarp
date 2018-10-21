@@ -58,7 +58,7 @@ class PiecewiseWarping(object):
         """
 
         # check inputs
-        if n_knots < 0 or not isinstance(n_knots, int):
+        if n_knots < 0 or not isinstance(n_knots, np.integer):
             raise ValueError('Number of knots must be nonnegative integer.')
 
         # model options
