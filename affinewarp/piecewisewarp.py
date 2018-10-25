@@ -1,8 +1,8 @@
 """Defines core functionality of Piecewise Linear Time Warping models."""
 
 import numpy as np
-from numba import jit
 import numba
+import numbers
 from tqdm import trange, tqdm
 from sklearn.utils.validation import check_is_fitted
 
@@ -58,7 +58,7 @@ class PiecewiseWarping(object):
         """
 
         # check inputs
-        if n_knots < 0 or not isinstance(n_knots, np.integer):
+        if n_knots < 0 or not isinstance(n_knots, numbers.Integral):
             raise ValueError('Number of knots must be nonnegative integer.')
 
         # model options
@@ -505,7 +505,7 @@ class PiecewiseWarping(object):
         self.objective_hist.append(self.loss_hist[-1] + self.penalty_hist[-1])
 
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def sparsewarp(X, Y, trials, xtst, out):
     """
     Implement warping function at discrete test points, e.g. for
@@ -552,7 +552,7 @@ def sparsewarp(X, Y, trials, xtst, out):
     return out
 
 
-@jit(nopython=True)
+@numba.jit(nopython=True)
 def densewarp(X, Y, data, out):
 
     K = out.shape[0]
