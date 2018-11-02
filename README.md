@@ -1,3 +1,7 @@
 Piecewise linear time warping models for neural data.
 
-Research code in early stages of development.
+```
+git clone https://github.com/ahwillia/affinewarp/
+cd affinewarp
+python setup.py install
+```
