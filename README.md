@@ -26,4 +26,4 @@ You will need to repeat these steps if we update the code.
 
 ## Getting started
 
-See the jupyter notebook demos in the `examples/` folder. The code is fairly well-documented but the tutorials can still be improved, so open issues if you run into trouble.
+See the jupyter notebook demos in the [`examples/`](https://github.com/ahwillia/affinewarp/tree/master/examples) folder. The code is fairly well-documented but the tutorials can still be improved, so open issues if you run into trouble.
