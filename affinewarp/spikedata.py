@@ -293,7 +293,10 @@ class SpikeData(object):
         result = self if inplace else self.copy()
         result._filter(result.neurons, kept_neurons)
         result.sort_spikes()
-        result.n_neurons = result.neurons.max() + 1
+        if result.n_spikes > 0:
+            result.n_neurons = result.neurons.max() + 1
+        else:
+            result.n_neurons = 0
         return result
 
     def add_trial(self, new_times, new_neurons):
