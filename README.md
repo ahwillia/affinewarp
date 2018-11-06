@@ -8,7 +8,12 @@ The code fits time warping models with either linear or piecewise linear warping
 
 ## Getting started
 
-After installing (see below). See the jupyter notebook demos in the [`examples/`](https://github.com/ahwillia/affinewarp/tree/master/examples) folder. The code is fairly well-documented but the tutorials can still be improved, so open issues if you run into trouble.
+After installing (see [below](#installing)), check out the demos in the [`examples/`](https://github.com/ahwillia/affinewarp/tree/master/examples) folder.
+
+* `Shift.ipynb` - demonstrates the essential ideas on a very simple, synthethic dataset containing only one neuron.
+* `OFC-2.ipynb` - shows a more complete analysis on real data. The tutorial uses a publicly available dataset from [crcns.org](https://crcns.org/), which can be found [here](https://crcns.org/data-sets/ofc/ofc-2/about-ofc-2). See `OFC-2-wrangle-data.ipynb` for instructions on downloading and organizing the dataset.
+
+The code is fairly well-documented but the tutorials can still be improved, so let us know if you run into trouble. 
 
 ## Installing
 
@@ -32,3 +37,12 @@ pip install .
 
 You will need to repeat these steps if we update the code.
 
+## Other references / resources
+
+* [tw-pca](https://github.com/ganguli-lab/twpca) - Time-Warping Principal Components Analysis, also supports linear and shift-only warping functions. Does not support piecewise linear warping functions and assumes that time series are low-dimensional. Nonlinear warping methods are also supported. See our [conference abstract](https://cs.stanford.edu/~poole/twpca_poster.pdf) and [poster](https://cs.stanford.edu/~poole/twpca_poster.pdf).
+
+* [tslearn](https://tslearn.readthedocs.io/) - A Python package supporting a variety of time series models, including DTW-based methods.
+
+## Contact
+
+ahwillia@stanford.edu (or open an issue here).
