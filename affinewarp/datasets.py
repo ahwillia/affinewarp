@@ -1,4 +1,6 @@
-"""Simple datasets for testing functionality."""
+"""
+Functions to generate synthetic data for testing functionality.
+"""
 
 from .piecewisewarp import PiecewiseWarping
 import numpy as np
