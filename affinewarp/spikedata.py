@@ -234,7 +234,7 @@ class SpikeData(object):
     def reorder_trials(self, trial_indices, inplace=False):
         """
         Re-indexes all spikes according to trial permutation. Indexing
-        semantics are the same as Numpy standard.
+        semantics are the same as numpy.
         """
         if any(np.unique(trial_indices) != np.arange(self.n_trials)):
             raise ValueError('Indices must be a permutation of trials. See '
@@ -247,10 +247,23 @@ class SpikeData(object):
         result.sort_spikes()
         return result
 
+    def squeeze_neurons(self, inplace=False):
+        """
+        Drops neurons that have no spikes. Then, reindexes neuron ids
+        as integers starting at zero.
+        """
+        arr_map = np.full(self.n_neurons, -1)
+        neuron_ids = np.unique(self.neurons)
+        arr_map[neuron_ids] = np.arange(len(neuron_ids))
+        result = self if inplace else self.copy()
+        _reindex(result.neurons, arr_map)
+        result.n_neurons = len(neuron_ids) - 1
+        return result
+
     def reorder_neurons(self, neuron_indices, inplace=False):
         """
         Re-indexes all spikes according to neuron permutation. Indexing
-        semantics are the same as Numpy standard.
+        semantics are the same as numpy.
         """
         if any(np.unique(neuron_indices) != np.arange(self.n_neurons)):
             raise ValueError('Indices must be a permutation of neurons. See '

@@ -8,20 +8,34 @@ from sklearn.utils.validation import check_is_fitted
 from numba import jit
 
 
-def rmse(data, nbins):
+def rmse(data, nbins=None):
     """
     Root-Mean-Squared-Error of trial-average for each neuron.
     """
-    binned = data.bin_spikes(nbins)
+    binned = data.bin_spikes(nbins) if isinstance(data, SpikeData) else data
     resid = binned - binned.mean(axis=0, keepdims=True)
     return np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
 
 
-def r_squared(data, nbins):
+def r_squared(data, nbins=None):
     """
     Coefficient of determination of trial-average for each neuron.
+
+    Parameters
+    ----------
+    data : ndarray or SpikeData
+        Either a ndarray holding binned spike times with shape
+        (trials x timepoints x neurons). Or a SpikeData instance holding
+        unbinned spike times.
+    nbins : int or None
+        Number of bins. Ignored if data are already binned.
+
+    Returns
+    -------
+    scores : ndarray
+        Computed R-squared value for each neuron.
     """
-    binned = data.bin_spikes(nbins)
+    binned = data.bin_spikes(nbins) if isinstance(data, SpikeData) else data
     # constant firing rate model
     resid = binned - binned.mean(axis=(0, 1), keepdims=True)
     ss_data = np.sum(resid ** 2, axis=(0, 1))

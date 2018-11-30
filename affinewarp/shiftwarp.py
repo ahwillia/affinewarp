@@ -26,7 +26,7 @@ class ShiftWarping(object):
     """
 
     def __init__(self, maxlag=.5, warp_reg_scale=0, smoothness_reg_scale=0,
-                 l2_reg_scale=1e-4, loss='quadratic'):
+                 l2_reg_scale=1e-7, loss='quadratic'):
         """Initializes ShiftWarping object with hyperparameters.
 
         Parameters
@@ -71,38 +71,40 @@ class ShiftWarping(object):
         #   K = number of trials
         #   T = number of timepoints
         #   N = number of features/neurons
+        #   L = number of time lags/shifts to search over in each direction.
         K, T, N = data.shape
-
-        # initialize shifts
-        self.shifts = np.zeros(K, dtype=int)
         L = int(self.maxlag * T)
 
-        # initialize template
-        self._fit_template(data)
-
-        # penalize warps by distance from identity
+        # Warps are penalized based on distance from identity. These penalties
+        # can be pre-computed up front.
         warp_penalty = self.warp_reg_scale * \
             np.abs(np.linspace(-L/T, L/T, 2*L+1)[None, :])
 
-        # initialize learning curve
-        losses = np.empty((K, 2*L+1))
-        self.loss_hist = []
+        # Initialize shifts.
+        self.shifts = np.zeros(K, dtype=int)
+
+        # Initialize model template.
+        self._fit_template(data)
+
+        # Compute the model loss over all shifts.
+        losses = np.zeros((K, 2*L+1))
+        self._shifted_loss(data, self.template, losses)
+        losses /= (T * N)
+
+        # Initialize learning curve with zero warping.
+        self.loss_hist = [losses[:, L].mean()]
+
+        # progress bar
         pbar = trange(iterations) if verbose else range(iterations)
 
         # main loop
         for i in pbar:
 
-            # compute the loss for each shift
-            losses.fill(0.0)
-            self._shifted_loss(data, self.template, losses)
-            losses /= (T * N)
-
-            # find the best shift for each trial
+            # Find the best shift for each trial.
             s = np.argmin(losses + warp_penalty, axis=1)
-
             self.shifts = -L + s
 
-            # compute the total loss
+            # Compute the loss after shifting
             total_loss = np.mean(losses[np.arange(K), s])
             self.loss_hist.append(total_loss)
 
@@ -110,7 +112,12 @@ class ShiftWarping(object):
             if verbose:
                 pbar.set_description('Loss: {0:.2f}'.format(total_loss))
 
-            self._fit_template(data)
+            # Re-fit model template and re-compute losses over all shifts.
+            if (i + 1) < iterations:
+                self._fit_template(data)
+                losses.fill(0.0)
+                self._shifted_loss(data, self.template, losses)
+                losses /= (T * N)
 
         # compute shifts as a fraction of trial length
         self.fractional_shifts = self.shifts / T
@@ -119,7 +126,7 @@ class ShiftWarping(object):
         K, T, N = data.shape
 
         if self.loss == 'quadratic':
-            DtD = .5 * K * _diff_gramian(T, self.smoothness_reg_scale, self.l2_reg_scale)
+            DtD = _diff_gramian(T, self.smoothness_reg_scale * K, self.l2_reg_scale *K)
             WtW = np.zeros((3, T))
             WtX = np.zeros((T, N))
             _fill_WtW(self.shifts, WtW[-1])

@@ -55,6 +55,7 @@ def _construct_template_optimizer(loss):
 
             # Initialize WtW with regularization term
             WtW = _diff_gramian(T, smoothness_reg_scale * K, l2_reg_scale * K)
+            DtD = WtW.copy()
 
             # Compute gramians.
             WtX = np.zeros((T, data.shape[-1]))

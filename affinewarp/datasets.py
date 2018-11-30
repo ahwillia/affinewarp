@@ -9,8 +9,8 @@ from scipy.ndimage import gaussian_filter1d
 
 def piecewise_warped_data(
         n_trials=120, n_timepoints=100, n_neurons=50, n_knots=1,
-        knot_mutation_scale=0.1, clip_y_knots=True, template_amplitude=1.0,
-        template_base=0.0, template_smoothness=2.0, noise_type="poisson",
+        knot_mutation_scale=0.1, clip_y_knots=True, template_amplitude=3.0,
+        template_base=0.0, template_smoothness=5.0, noise_type="poisson",
         noise_scale=0.1, seed=1234):
     """Generates data from the PiecewiseWarping model.
 

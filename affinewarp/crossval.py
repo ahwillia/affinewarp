@@ -11,25 +11,30 @@ from .shiftwarp import ShiftWarping
 from . import metrics
 
 
-def paramsearch_rmse(
-        binned, data, n_samples, min_knots=0, max_knots=2,
-        min_smooth_scale=1e-4, max_smooth_scale=1e1, min_warp_reg=1e-4,
-        max_warp_reg=1e1):
+def paramsearch(
+        binned, n_models, data=None, heldout_frac=.2, knot_range=(-1, 1),
+        smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1), **fit_kw):
     """
-    Performs grid search over hyperparameters, leaving out one neuron at a time
-    and evaluating across-trial reliability on warped spike times.
+    Performs randomized search over hyperparameters. An R-squared metric of
+    across-trial reliability is measured on a test set of neurons; larger
+    scores indicate warping functions that generalize better.
 
     Parameters
     ----------
-    binned
-    data
-    cv_grid_size
-    min_knots
-    max_knots
-    min_smooth_scale
-    max_smooth_scale
-    min_reg_scale
-    max_reg_scale
+    binned : ndarray
+        trials x timepoints x neurons binned spikes
+    n_models : int
+        Number of parameter settings to try.
+    data : SpikeData
+        Holds unbinned spike times (optional).
+    heldout_frac : float
+        Fraction of neurons to holdout for testing.
+    knot_range : tuple of ints
+        Specifies number of knots in piecewise warping functions.
+        Optional, default is (-1, 2).
+    smoothness_range : tuple of floats
+
+    warpreg_range
 
     Returns
     -------
@@ -39,28 +44,57 @@ def paramsearch_rmse(
     warp_reg
     """
 
-    # Enumerate all parameter settings for each.
-    knots = np.random.randint(min_knots, max_knots + 1, size=n_samples)
-    smoothness = 10 ** np.random.uniform(np.log10(min_smooth_scale),
-                                         np.log10(max_smooth_scale),
-                                         size=n_samples)
-    warp_reg = 10 ** np.random.uniform(np.log10(min_warp_reg),
-                                       np.log10(max_warp_reg),
-                                       size=n_samples)
+    # Check inputs.
+    if (data is not None) and (data.n_neurons != binned.shape[-1]):
+        raise ValueError(
+            "Expected binned spikes and SpikeData object to have the same "
+            "number of neurons."
+        )
 
-    scores = []
-    for _, k, s, w in zip(trange(n_samples), knots, smoothness, warp_reg):
+    # Dataset dimensions.
+    n_neurons = binned.shape[-1]
+    n_bins = binned.shape[1]
+    n_test = int(n_neurons * heldout_frac)
+
+    # Enumerate all parameter settings for each model.
+    knots = np.random.randint(knot_range[0], knot_range[1] + 1, size=n_models)
+    smoothness = 10 ** np.random.uniform(*np.log10(smoothness_range),
+                                         size=n_models)
+    warp_reg = 10 ** np.random.uniform(*np.log10(warpreg_range),
+                                       size=n_models)
+
+    # Define train set and test set partitions.
+    neurons = np.arange(n_neurons)
+    testset = np.sort(np.random.choice(neurons, n_test, replace=False))
+    if data is None:
+        testdata = binned[:, :, testset]
+    else:
+        testdata = data.select_neurons(testset)
+    trainset = np.setdiff1d(neurons, testset)
+    traindata = binned[:, :, trainset]
+
+    # Compute scores without warping.
+    raw_scores = metrics.r_squared(testdata, n_bins)
+
+    # Allocate space for results
+    scores = np.empty((n_models, len(testset)))
+
+    # Fit models.
+    for i, k, s, w in zip(trange(n_models), knots, smoothness, warp_reg):
+
         # Construct model object
-        if k > 0:
-            model = PiecewiseWarping(n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
-        else:
+        if k == -1:
             model = ShiftWarping(smoothness_reg_scale=s, warp_reg_scale=w)
+        else:
+            model = PiecewiseWarping(n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
 
-        # Transform each neuron
-        aligned_data = heldout_transform(model, binned, data, progress_bar=False)
-        scores.append(metrics.rmse(aligned_data, nbins=binned.shape[1]))
+        # Fit model to training set.
+        model.fit(traindata, verbose=False, **fit_kw)
 
-    return np.asarray(scores), knots, smoothness, warp_reg
+        # Compute scores on test set.
+        scores[i] = metrics.rmse(model.transform(testdata), n_bins)
+
+    return scores, raw_scores, knots, smoothness, warp_reg
 
 
 def heldout_transform(model, binned, data, transformed_neurons=None,
