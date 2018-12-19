@@ -145,7 +145,10 @@ class ShiftWarping(object):
                                    self.l2_reg_scale, shifts=self.shifts)
 
             # Fit template.
-            opt = scipy.optimize.minimize(obj, x0, jac=True, hessp=obj.hessp, method='newton-cg')
+            opt = scipy.optimize.minimize(obj, x0,
+                                          jac=True, hessp=obj.hessp,
+                                          method='newton-cg',
+                                          options=dict(maxiter=1))
             self.template = (opt.x).reshape(T, N)
 
     def argsort_warps(self):
@@ -179,8 +182,7 @@ class ShiftWarping(object):
 
         # For SpikeData objects.
         if is_spikes:
-            d = data.copy()
-            return d.shift_each_trial_by_fraction(self.fractional_shifts)
+            return data.shift_each_trial_by_fraction(self.fractional_shifts)
 
         # For dense data (trials x timebins x units).
         else:
