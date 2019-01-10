@@ -6,3 +6,6 @@ __author__ = 'Alex Williams <ahwillia@stanford.edu>'
 from .piecewisewarp import PiecewiseWarping
 from .shiftwarp import ShiftWarping
 from .spikedata import SpikeData
+
+from .multiwarp import MultiShiftWarping
+from .glomwarp import AgglomerativeWarping

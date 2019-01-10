@@ -1,6 +1,6 @@
 import numpy as np
 from .piecewisewarp import PiecewiseWarping
-from .shiftwarp import Shiftwarping
+from .shiftwarp import ShiftWarping
 from tqdm import trange
 
 
@@ -17,7 +17,7 @@ class MultiShiftWarping:
             raise ValueError('MultiWarp only supports quadratic loss.')
 
         # Initialize models.
-        self.models = [Shiftwarping(**model_args) for m in range(n_templates)]
+        self.models = [ShiftWarping(**model_args) for m in range(n_templates)]
 
     def fit(self, data, iterations=20, verbose=True):
 
@@ -28,21 +28,27 @@ class MultiShiftWarping:
         psth = data.mean(axis=0)
         for f, model in zip(bases, self.models):
             model.shifts = np.zeros(n_trials, dtype=int)
-            model._template = (.2 * psth) + (.8 * psth * f[:, None])
+            model.template = psth * f[:, None]
+            # model.template = (.2 * psth) + (.8 * psth * f[:, None])
+            # model.template = np.random.randn(*psth.shape)
 
         # Compute total model prediction.
         pred = self.predict()
 
         # Fit each model to its residual
+        self.loss_hist = [np.mean((pred - data)**2)]
         pbar = trange(iterations) if verbose else range(iterations)
         for i in pbar:
             for k, model in enumerate(self.models):
                 pred -= model.predict()
-                model.fit(data - pred, iterations=1, verbose=False)
+                model.fit(data - pred, iterations=2, verbose=False)
                 pred += model.predict()
+            self.loss_hist.append(np.mean((pred - data)**2))
 
     def predict(self):
-        pred = np.zeros_like(data)
+        K = len(self.models[0].shifts)
+        T, N = self.models[0].template.shape
+        pred = np.zeros((K, T, N))
         for model in self.models:
             pred += model.predict()
         return pred
@@ -89,15 +95,11 @@ class MultiShiftWarping:
 
         # Create spike data objects
         t0, t1 = data.tmin, data.tmax
-        dims = dict(n_neurons=data.n_neurons, data.n_trials)
+        dims = dict(n_trials=data.n_trials, n_neurons=data.n_neurons)
         for kk, tt, nn in zip(trials, times, neurons):
             partitions.append(SpikeData(kk, tt, nn, t0, t1, **dims))
 
         return partitions
-
-    @property
-    def loss_hist(self):
-        return self.models[-1].loss_hist
 
 
 # ====================== #
