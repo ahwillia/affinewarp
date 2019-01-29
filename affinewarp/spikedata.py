@@ -37,11 +37,10 @@ class SpikeData(object):
         Same as spiketimes, but expressed as a fraction of time within trial.
     """
 
-    def __init__(self, trials, spiketimes, neurons, tmin, tmax):
+    def __init__(
+            self, trials, spiketimes, neurons, tmin, tmax,
+            n_trials=None, n_neurons=None):
         """
-
-        Throws away spikes that aren't in [tmin, tmax]
-
         Parameters
         ----------
         trials : array-like
@@ -77,23 +76,10 @@ class SpikeData(object):
                                                  self.spiketimes.size,
                                                  self.neurons.size))
 
-        # If dataset isn't empty, sort and pre-process spikes.
+        # Determine number of trials and neurons
         if self.trials.size > 0:
-
-            # Find minimum and maximum indices along neurons and trials.
-            min_trial, max_trial = min_max_1d(self.trials)
-            if min_trial < 0:
-                raise ValueError("Trial IDs can't be negative.")
-            min_neuron, max_neuron = min_max_1d(self.neurons)
-            if min_neuron < 0:
-                raise ValueError("Neuron IDs can't be negative.")
-
-            # Store data dimensions.
-            self.n_trials = max_trial + 1
-            self.n_neurons = max_neuron + 1
-
-            # Sort spikes by trial id. The up front cost of this computation is
-            # often worth it for faster shifting and indexing.
+            self.n_neurons = np.max(neurons) + 1 if n_neurons is None else n_neurons
+            self.n_trials = np.max(trials) + 1 if n_trials is None else n_trials
             self.sort_spikes()
 
         else:
@@ -236,9 +222,9 @@ class SpikeData(object):
         Re-indexes all spikes according to trial permutation. Indexing
         semantics are the same as numpy.
         """
-        if any(np.unique(trial_indices) != np.arange(self.n_trials)):
+        if not np.array_equal(np.sort(trial_indices), np.arange(self.n_trials)):
             raise ValueError('Indices must be a permutation of trials. See '
-                             'SpikeData.filter_trials to select subsets of '
+                             'SpikeData.select_trials to select subsets of '
                              'trials.')
         result = self if inplace else self.copy()
         # argsort indices to get position/destination for reindexing
@@ -265,7 +251,7 @@ class SpikeData(object):
         Re-indexes all spikes according to neuron permutation. Indexing
         semantics are the same as numpy.
         """
-        if any(np.unique(neuron_indices) != np.arange(self.n_neurons)):
+        if np.any(np.unique(neuron_indices) != np.arange(self.n_neurons)):
             raise ValueError('Indices must be a permutation of neurons. See '
                              'SpikeData.filter_neurons to select subsets of '
                              'neurons.')
@@ -373,8 +359,10 @@ class SpikeData(object):
         self.neurons = np.ascontiguousarray(self.neurons[idx])
 
     def copy(self):
-        return type(self)(self.trials.copy(), self.spiketimes.copy(),
-                          self.neurons.copy(), self.tmin, self.tmax)
+        result = type(self)(self.trials.copy(), self.spiketimes.copy(),
+                            self.neurons.copy(), self.tmin, self.tmax,
+                            n_trials=self.n_trials, n_neurons=self.n_neurons)
+        return result
 
     def __getitem__(self, key):
         subscripts = ('spiketimes', 'trials', 'neurons')

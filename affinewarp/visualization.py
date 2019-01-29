@@ -26,6 +26,11 @@ def rasters(data, subplots=(5, 6), fig=None, axes=None, figsize=(9*1.5, 5*1.5),
         Either ('black' or 'white') specifying background color.
     **scatter_kw
         Additional keyword args are passed to matplotlib.pyplot.scatter
+
+    Returns
+    -------
+    fig : matplotlib.Figure instance
+    axes : ndarray of matplotlib.Axes objects
     """
 
     trials, times, neurons = data.trials, data.spiketimes, data.neurons

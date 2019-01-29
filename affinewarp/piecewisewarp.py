@@ -203,6 +203,11 @@ class PiecewiseWarping(object):
             self._record_loss(data)
             if record_knots:
                 self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
+            if verbose:
+                raw_imp = (self.loss_hist[0] - self.loss_hist[-1])
+                rel_imp = 100 * raw_imp / self.loss_hist[0]
+                pbar.set_description(
+                    "Loss improvement: {0:.2f}%".format(rel_imp))
 
     def _fit_warps(self, data, iterations):
         """Fit warping functions by local random search.

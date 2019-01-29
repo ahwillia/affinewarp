@@ -45,6 +45,9 @@ def test_reorder_trials():
     X[0, 0, 0] = 1
     X[-1, -1, -1] = 1
 
+    # Add no spikes on some trials.
+    X[10:15] = 0
+
     # Construct SpikeData instance.
     trials, spiketimes, neurons = np.where(X)
     data = SpikeData(trials, spiketimes, neurons, tmin=0, tmax=X.shape[1]-1)
@@ -58,6 +61,8 @@ def test_reorder_trials():
     Xprm = X[kk]
     permuted = data.reorder_trials(kk)
     assert_array_equal(Xprm, permuted.bin_spikes(X.shape[1]))
+
+    assert permuted.n_trials == data.n_trials
 
 
 def test_select_neurons():

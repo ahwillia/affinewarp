@@ -12,36 +12,73 @@ from . import metrics
 
 
 def paramsearch(
-        binned, n_models, data=None, heldout_frac=.2, knot_range=(-1, 1),
-        smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1), **fit_kw):
+        binned, n_samples, data=None, n_folds=5, knot_range=(-1, 1),
+        smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
+        scoring='r_squared', **fit_kw):
     """
-    Performs randomized search over hyperparameters. An R-squared metric of
-    across-trial reliability is measured on a test set of neurons; larger
-    scores indicate warping functions that generalize better.
+    Performs randomized search over hyperparameters on warping
+    functions. For each set of randomly sampled parameters, neurons
+    are randomly split `n_folds` times into train/test groups. An
+    R-squared metric of across-trial reliability is measured on each
+    test set; larger scores indicate warping functions that generalize
+    better.
 
     Parameters
     ----------
     binned : ndarray
         trials x timepoints x neurons binned spikes
-    n_models : int
-        Number of parameter settings to try.
+    n_samples : int
+        Number of parameter settings to try per fold.
     data : SpikeData
-        Holds unbinned spike times (optional).
-    heldout_frac : float
-        Fraction of neurons to holdout for testing.
+        Holds unbinned spike times.
+    n_folds : int
+        Number of folds used for cross-validation.
     knot_range : tuple of ints
-        Specifies number of knots in piecewise warping functions.
-        Optional, default is (-1, 2).
+        Specifies (minimum, maximum) number of knots in warping
+        functions. Uniform random integers over this includive interval
+        are sampled for each model. A value of -1 denotes a shift-only
+        warping model; a value of 0 denotes a linear warping model (no
+        interior knots); etc.
     smoothness_range : tuple of floats
-
-    warpreg_range
+        Specifies (minimum, maximum) strength of regularization on
+        template smoothness; larger values penalize roughness over time
+        more stringently. The regularization strength for each model
+        is randomly sampled from a log-uniform distribution over this
+        interval.
+    warpreg_range : tuple of floats
+        Specifies (minimum, maximum) strength of regularization on the
+        area between the warping functions and the identity line;
+        larger values penalize warping more stringently. The
+        regularization strength for each model is randomly sampled from
+        a log-uniform distribution over this interval.
+    scoring : str
+        Specifies function for quantifying model generalization to
+        held out neurons. Valid strings include ('r_squared',
+        'neg_mse') for R-squared and negative root-mean-squared error,
+        respectively. See metrics.py for more details.
+    **fit_kw : dict
+        Additional keyword arguments are passed to model.fit(...)
 
     Returns
     -------
-    rmse : (knots x smoothness x warp regularization)
-    knots
-    smoothness
-    warp_reg
+    scores : ndarray
+        (n_samples x n_neurons) array holding fit score for each neuron
+        after warping.
+    knots : ndarray
+        (n_samples,) array holding number of knots in piecewise linear
+        warping function for each evaluated model.
+    smoothness : ndarray
+        (n_samples,) array holding sampled regularization strengths on
+        warping templates, penalizing roughness.
+    warp_reg : ndarray
+        (n_samples,) array holding sampled regularization strengths on
+        warping function distance from identity.
+    loss_hists : ndarray
+        (n_samples, n_folds, n_iterations + 1) array holding the
+        learning curves for all models.
+    best_models : dict
+        Dictionary mapping number of knots (int) to a ShiftWarping or
+        PiecewiseWarping model instance.
     """
 
     # Check inputs.
@@ -51,77 +88,120 @@ def paramsearch(
             "number of neurons."
         )
 
+    _valid_scoring = ('neg_mse', 'r_squared')
+    if scoring not in _valid_scoring:
+        raise ValueError(
+            "Expected 'scoring' parameter to be one of "
+            "{}.".format(', '.join(_valid_scoring))
+        )
+
+    # Get scoring function.
+    score_fn = getattr(metrics, scoring)
+
     # Dataset dimensions.
     n_neurons = binned.shape[-1]
     n_bins = binned.shape[1]
-    n_test = int(n_neurons * heldout_frac)
 
     # Enumerate all parameter settings for each model.
-    knots = np.random.randint(knot_range[0], knot_range[1] + 1, size=n_models)
+    knots = np.random.randint(knot_range[0], knot_range[1] + 1, size=n_samples)
     smoothness = 10 ** np.random.uniform(*np.log10(smoothness_range),
-                                         size=n_models)
+                                         size=n_samples)
     warp_reg = 10 ** np.random.uniform(*np.log10(warpreg_range),
-                                       size=n_models)
-
-    # Define train set and test set partitions.
-    neurons = np.arange(n_neurons)
-    testset = np.sort(np.random.choice(neurons, n_test, replace=False))
-    if data is None:
-        testdata = binned[:, :, testset]
-    else:
-        testdata = data.select_neurons(testset)
-    trainset = np.setdiff1d(neurons, testset)
-    traindata = binned[:, :, trainset]
-
-    # Compute scores without warping.
-    raw_scores = metrics.r_squared(testdata, n_bins)
+                                       size=n_samples)
 
     # Allocate space for results
-    scores = np.empty((n_models, len(testset)))
+    scores = np.full((n_samples, n_neurons), np.nan)
+    fit_kw.setdefault('iterations', 50)
+    loss_hists = np.empty((n_samples, n_folds, fit_kw['iterations'] + 1))
+
+    # Set up indexing for train/test splits.
+    neuron_indices = np.arange(n_neurons)
 
     # Fit models.
-    for i, k, s, w in zip(trange(n_models), knots, smoothness, warp_reg):
+    for i, k, s, w in zip(trange(n_samples), knots, smoothness, warp_reg):
 
-        # Construct model object
+        # Construct model object.
         if k == -1:
             model = ShiftWarping(smoothness_reg_scale=s, warp_reg_scale=w)
         else:
-            model = PiecewiseWarping(n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
+            model = PiecewiseWarping(
+                n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
 
-        # Fit model to training set.
-        model.fit(traindata, verbose=False, **fit_kw)
+        # Shuffle neuron order for train and test sets.
+        np.random.shuffle(neuron_indices)
 
-        # Compute scores on test set.
-        scores[i] = metrics.rmse(model.transform(testdata), n_bins)
+        # Iterate over test sets.
+        for f, testset in enumerate(np.array_split(neuron_indices, n_folds)):
 
-    return scores, raw_scores, knots, smoothness, warp_reg
+            # Get indices for train set.
+            testset.sort()  # needed for SpikeData selection.
+            trainset = np.ones_like(neuron_indices, bool)
+            trainset[testset] = False
+
+            # Fit model to training set.
+            model.fit(binned[:, :, trainset], verbose=False, **fit_kw)
+            loss_hists[i, f] = model.loss_hist
+
+            # Apply inverse warping functions to the test set.
+            if data is None:
+                testdata = binned[:, :, testset]
+            else:
+                testdata = data.select_neurons(testset)
+
+            # Evaluate score metric.
+            scores[i, testset] = score_fn(model.transform(testdata), n_bins)
+
+    # Find best scoring models for each knot value.
+    best_models = dict()
+    mean_scores = np.mean(scores, axis=1)
+
+    # Iterate over sampled knots in parameter search.
+    for k in np.unique(knots):
+
+        # Find best scoring model with k knots.
+        idx = np.where(knots == k)[0]
+        i = idx[np.argmax(mean_scores[idx])]
+
+        # Extract regularization strengths for best model.
+        s, w = smoothness[i], warp_reg[i]
+
+        # Instantiate and stroe model.
+        if k == -1:
+            best_models[k] = ShiftWarping(
+                smoothness_reg_scale=s, warp_reg_scale=w)
+        else:
+            best_models[k] = PiecewiseWarping(
+                n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
+
+    return scores, knots, smoothness, warp_reg, loss_hists, best_models
 
 
 def heldout_transform(model, binned, data, transformed_neurons=None,
                       progress_bar=True, **fit_kw):
     """
-    Transform each neuron's activity by holding it out of model fitting and
-    applying warping functions fit to the remaining neurons.
+    Transform each neuron's activity by holding it out of model fitting
+    and applying warping functions fit to the remaining neurons.
 
     Parameters
     ----------
     models : ShiftWarping or AffineWarping instance
         Model to fit
     binned : numpy.ndarray
-        Array holding binned spike times (trials x num_timebins x neurons)
+        Array holding binned spike times (trials x num_timebins x
+        neurons)
     data : SpikeData instance
         Raw spike times.
     transformed_neurons (optional) : array-like or ``None``
-        Indices of neurons that are transformed. If None, all neurons are
-        transformed.
+        Indices of neurons that are transformed. If None, all neurons
+        are transformed.
     fit_kw (optional) : dict
         Additional keyword arguments are passed to ``model.fit(...)``.
 
     Returns
     -------
     aligned_data : SpikeData instance
-        Transformed version of ``data`` where each neuron/unit is independently
-        aligned.
+        Transformed version of ``data`` where each neuron/unit is
+        independently aligned.
 
     Raises
     ------
@@ -129,9 +209,10 @@ def heldout_transform(model, binned, data, transformed_neurons=None,
 
     Notes
     -----
-    Since a different model is fit for each neuron, the warping functions are
-    not necessarily consistent across neurons in the returned data array. Thus,
-    each neuron should be considered as having its own time axis.
+    Since a different model is fit for each neuron, the warping
+    functions are not necessarily consistent across neurons in the
+    returned data array. Thus, each neuron should be considered as
+    having its own time axis.
     """
 
     # broadcast keywords into dict, with model instances as keys
@@ -178,7 +259,7 @@ def heldout_transform(model, binned, data, transformed_neurons=None,
 
 def null_dataset(data, nbins, upsample_factor=10):
     """
-    Generate Poisson random spiking pattern on each trial.
+    Generate Poisson random spiking data with identical trial-average statistics.
 
     Parameters
     ----------
