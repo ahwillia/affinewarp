@@ -4,3 +4,4 @@ matplotlib
 numba
 tqdm
 sklearn
+pytest
