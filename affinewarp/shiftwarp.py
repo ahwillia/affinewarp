@@ -57,7 +57,7 @@ class ShiftWarping(object):
         elif loss == 'poisson':
             self._shifted_loss = _compute_shifted_poiss_loss
 
-    def fit(self, data, iterations=10, verbose=True, warp_iterations=None):
+    def fit(self, data, iterations=20, verbose=True, warp_iterations=None):
         """
         Fit shift warping to data.
         """

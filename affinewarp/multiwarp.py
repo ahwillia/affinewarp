@@ -1,3 +1,5 @@
+"""Experimental code on Multi-Warping."""
+
 import numpy as np
 from .piecewisewarp import PiecewiseWarping
 from .shiftwarp import ShiftWarping

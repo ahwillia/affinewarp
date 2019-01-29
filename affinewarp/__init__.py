@@ -7,5 +7,7 @@ from .piecewisewarp import PiecewiseWarping
 from .shiftwarp import ShiftWarping
 from .spikedata import SpikeData
 
-from .multiwarp import MultiShiftWarping
-from .glomwarp import AgglomerativeWarping
+# Experimental code.
+#
+# from .multiwarp import MultiShiftWarping
+# from .glomwarp import AgglomerativeWarping, StagewiseWarping
