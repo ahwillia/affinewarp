@@ -14,7 +14,7 @@ import deepdish as dd
 def paramsearch(
         binned, n_samples, data=None, n_folds=5, knot_range=(-1, 2),
         smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
-        scoring='r_squared', outfile=None, **fit_kw):
+        outfile=None, **fit_kw):
     """
     Performs randomized search over hyperparameters on warping
     functions. For each set of randomly sampled parameters, neurons
@@ -51,11 +51,6 @@ def paramsearch(
         larger values penalize warping more stringently. The
         regularization strength for each model is randomly sampled from
         a log-uniform distribution over this interval.
-    scoring : str
-        Specifies function for quantifying model generalization to
-        held out neurons. Valid strings include ('r_squared',
-        'neg_mse') for R-squared and negative root-mean-squared error,
-        respectively. See metrics.py for more details.
     **fit_kw : dict
         Additional keyword arguments are passed to model.fit(...)
 
@@ -65,8 +60,14 @@ def paramsearch(
         Dictionary holding sampled model parameters and scores. Key-value
         pairs are:
 
-        "scores" : (n_samples x n_neurons) array holding fit score for
-        each neuron after warping.
+        "neg_mse" : (n_samples x n_neurons) array holding negative mean-squared
+        error score for each neuron.
+
+        "r_squared" : (n_samples x n_neurons) array holding R-squared score
+        for each each neuron.
+
+        "snr" : (n_samples x n_neurons) array holding signal-to-noise ratio
+        score for each each neuron.
 
         "knots" : (n_samples,) array holding number of knots in piecewise
         linear warping function for each evaluated model.
@@ -114,6 +115,9 @@ def paramsearch(
 
     # Allocate space for results
     scores = np.full((n_samples, n_neurons), np.nan)
+    scores = np.full((n_samples, n_neurons), np.nan)
+    scores = np.full((n_samples, n_neurons), np.nan)
+
     fit_kw.setdefault('iterations', 50)
     loss_hists = np.empty((n_samples, n_folds, fit_kw['iterations'] + 1))
 
@@ -155,18 +159,23 @@ def paramsearch(
             else:
                 testdata = data.select_neurons(testset)
 
-            # Evaluate score metric.
-            scores[i, testset] = score_fn(model.transform(testdata), n_bins)
+            # Evaluate metrics.
+            aligned_data = model.transform(testdata)
+            neg_mse[i, testset] = metrics.neg_mse(aligned_data, n_bins)
+            r_squared[i, testset] = metrics.r_squared(aligned_data, n_bins)
+            snr[i, testset] = metrics.snr(aligned_data, n_bins)
 
         # Store best model in each knot category.
-        mean_score = np.mean(scores[i])
+        mean_score = np.mean(neg_mse[i])
         if mean_score > best_scores[k]:
             best_scores[k] = mean_score
             best_models[k] = deepcopy(model)
 
         # Save results
         results = {
-            'scores': scores[:(i+1)],
+            'neg_mse': neg_mse[:(i+1)],
+            'r_squared': r_squared[:(i+1)],
+            'snr': snr[:(i+1)],
             'knots': knots[:(i+1)],
             'smoothness': smoothness[:(i+1)],
             'warp_reg': warp_reg[:(i+1)],
