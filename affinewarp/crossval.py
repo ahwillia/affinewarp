@@ -2,19 +2,19 @@
 
 import numpy as np
 from tqdm import tqdm, trange
-import sparse
 from copy import deepcopy
 from .spikedata import SpikeData
 from .utils import upsample
 from .piecewisewarp import PiecewiseWarping
 from .shiftwarp import ShiftWarping
 from . import metrics
+import deepdish as dd
 
 
 def paramsearch(
-        binned, n_samples, data=None, n_folds=5, knot_range=(-1, 1),
+        binned, n_samples, data=None, n_folds=5, knot_range=(-1, 2),
         smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
-        scoring='r_squared', **fit_kw):
+        scoring='r_squared', outfile=None, **fit_kw):
     """
     Performs randomized search over hyperparameters on warping
     functions. For each set of randomly sampled parameters, neurons
@@ -34,19 +34,19 @@ def paramsearch(
     n_folds : int
         Number of folds used for cross-validation.
     knot_range : tuple of ints
-        Specifies (minimum, maximum) number of knots in warping
+        Specifies [minimum, maximum) number of knots in warping
         functions. Uniform random integers over this includive interval
         are sampled for each model. A value of -1 denotes a shift-only
         warping model; a value of 0 denotes a linear warping model (no
         interior knots); etc.
     smoothness_range : tuple of floats
-        Specifies (minimum, maximum) strength of regularization on
+        Specifies [minimum, maximum) strength of regularization on
         template smoothness; larger values penalize roughness over time
         more stringently. The regularization strength for each model
         is randomly sampled from a log-uniform distribution over this
         interval.
     warpreg_range : tuple of floats
-        Specifies (minimum, maximum) strength of regularization on the
+        Specifies [minimum, maximum) strength of regularization on the
         area between the warping functions and the identity line;
         larger values penalize warping more stringently. The
         regularization strength for each model is randomly sampled from
@@ -61,21 +61,24 @@ def paramsearch(
 
     Returns
     -------
-    scores : ndarray
-        (n_samples x n_neurons) array holding fit score for each neuron
-        after warping.
-    knots : ndarray
-        (n_samples,) array holding number of knots in piecewise linear
-        warping function for each evaluated model.
-    smoothness : ndarray
-        (n_samples,) array holding sampled regularization strengths on
-        warping templates, penalizing roughness.
-    warp_reg : ndarray
-        (n_samples,) array holding sampled regularization strengths on
-        warping function distance from identity.
-    loss_hists : ndarray
-        (n_samples, n_folds, n_iterations + 1) array holding the
-        learning curves for all models.
+    results : dict
+        Dictionary holding sampled model parameters and scores. Key-value
+        pairs are:
+
+        "scores" : (n_samples x n_neurons) array holding fit score for
+        each neuron after warping.
+
+        "knots" : (n_samples,) array holding number of knots in piecewise
+        linear warping function for each evaluated model.
+
+        "smoothness" : (n_samples,) array holding sampled regularization
+        strengths on warping templates, penalizing roughness.
+
+        "warp_reg" : (n_samples,) array holding sampled regularization
+            strengths on warping function distance from identity.
+        "loss_hists" : (n_samples, n_folds, n_iterations + 1) array
+            holding the learning curves for all models.
+
     best_models : dict
         Dictionary mapping number of knots (int) to a ShiftWarping or
         PiecewiseWarping model instance.
@@ -103,7 +106,7 @@ def paramsearch(
     n_bins = binned.shape[1]
 
     # Enumerate all parameter settings for each model.
-    knots = np.random.randint(knot_range[0], knot_range[1] + 1, size=n_samples)
+    knots = np.random.randint(knot_range[0], knot_range[1], size=n_samples)
     smoothness = 10 ** np.random.uniform(*np.log10(smoothness_range),
                                          size=n_samples)
     warp_reg = 10 ** np.random.uniform(*np.log10(warpreg_range),
@@ -116,6 +119,10 @@ def paramsearch(
 
     # Set up indexing for train/test splits.
     neuron_indices = np.arange(n_neurons)
+
+    # Allocate dictionaries that store the best models and scores.
+    best_models = {k: None for k in range(*knot_range)}
+    best_scores = {k: -np.inf for k in range(*knot_range)}
 
     # Fit models.
     for i, k, s, w in zip(trange(n_samples), knots, smoothness, warp_reg):
@@ -151,29 +158,24 @@ def paramsearch(
             # Evaluate score metric.
             scores[i, testset] = score_fn(model.transform(testdata), n_bins)
 
-    # Find best scoring models for each knot value.
-    best_models = dict()
-    mean_scores = np.mean(scores, axis=1)
+        # Store best model in each knot category.
+        mean_score = np.mean(scores[i])
+        if mean_score > best_scores[k]:
+            best_scores[k] = mean_score
+            best_models[k] = deepcopy(model)
 
-    # Iterate over sampled knots in parameter search.
-    for k in np.unique(knots):
+        # Save results
+        results = {
+            'scores': scores[:(i+1)],
+            'knots': knots[:(i+1)],
+            'smoothness': smoothness[:(i+1)],
+            'warp_reg': warp_reg[:(i+1)],
+            'loss_hists': loss_hists[:(i+1)],
+        }
+        if outfile is not None:
+            dd.io.save(outfile, results)
 
-        # Find best scoring model with k knots.
-        idx = np.where(knots == k)[0]
-        i = idx[np.argmax(mean_scores[idx])]
-
-        # Extract regularization strengths for best model.
-        s, w = smoothness[i], warp_reg[i]
-
-        # Instantiate and stroe model.
-        if k == -1:
-            best_models[k] = ShiftWarping(
-                smoothness_reg_scale=s, warp_reg_scale=w)
-        else:
-            best_models[k] = PiecewiseWarping(
-                n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
-
-    return scores, knots, smoothness, warp_reg, loss_hists, best_models
+    return results, best_models
 
 
 def heldout_transform(model, binned, data, transformed_neurons=None,
