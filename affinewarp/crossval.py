@@ -92,16 +92,6 @@ def paramsearch(
             "number of neurons."
         )
 
-    _valid_scoring = ('neg_mse', 'r_squared')
-    if scoring not in _valid_scoring:
-        raise ValueError(
-            "Expected 'scoring' parameter to be one of "
-            "{}.".format(', '.join(_valid_scoring))
-        )
-
-    # Get scoring function.
-    score_fn = getattr(metrics, scoring)
-
     # Dataset dimensions.
     n_neurons = binned.shape[-1]
     n_bins = binned.shape[1]
@@ -114,9 +104,9 @@ def paramsearch(
                                        size=n_samples)
 
     # Allocate space for results
-    scores = np.full((n_samples, n_neurons), np.nan)
-    scores = np.full((n_samples, n_neurons), np.nan)
-    scores = np.full((n_samples, n_neurons), np.nan)
+    neg_mse = np.full((n_samples, n_neurons), np.nan)
+    r_squared = np.full((n_samples, n_neurons), np.nan)
+    snr = np.full((n_samples, n_neurons), np.nan)
 
     fit_kw.setdefault('iterations', 50)
     loss_hists = np.empty((n_samples, n_folds, fit_kw['iterations'] + 1))
