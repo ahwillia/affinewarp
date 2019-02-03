@@ -14,7 +14,7 @@ import deepdish as dd
 def paramsearch(
         binned, n_samples, data=None, n_folds=5, knot_range=(-1, 2),
         smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
-        outfile=None, **fit_kw):
+        iter_range=(50, 300), warp_iter_range=(50, 300), outfile=None):
     """
     Performs randomized search over hyperparameters on warping
     functions. For each set of randomly sampled parameters, neurons
@@ -51,8 +51,18 @@ def paramsearch(
         larger values penalize warping more stringently. The
         regularization strength for each model is randomly sampled from
         a log-uniform distribution over this interval.
-    **fit_kw : dict
-        Additional keyword arguments are passed to model.fit(...)
+    iter_range : tuple of ints
+        Specifies [minimum, maximum) number of iterations used to optimize
+        each model, which are sampled log-uniformly over this interval
+        and constrained to be integer-valued.
+    warp_iter_range : tuple of ints
+        Specifies [minimum, maximum) number of inner iterations to apply
+        to update the warping functions on each step of optimization.
+        These are also randomly sampled log-uniformly over the specified
+        interval.
+
+    outfile : None or str (optional)
+        If provided, data are saved after each iteration to this filename.
 
     Returns
     -------
@@ -97,19 +107,27 @@ def paramsearch(
     n_bins = binned.shape[1]
 
     # Enumerate all parameter settings for each model.
-    knots = np.random.randint(knot_range[0], knot_range[1], size=n_samples)
+    knots = np.random.randint(*knot_range, size=n_samples)
     smoothness = 10 ** np.random.uniform(*np.log10(smoothness_range),
                                          size=n_samples)
     warp_reg = 10 ** np.random.uniform(*np.log10(warpreg_range),
                                        size=n_samples)
+    iterations = 10 ** np.random.uniform(*np.log10(iter_range),
+                                         size=n_samples)
+    warp_iterations = 10 ** np.random.uniform(*np.log10(warp_iter_range),
+                                              size=n_samples)
+
+    # Convert sampled iterations to integers.
+    iterations = iterations.astype('int')
+    warp_iterations = warp_iterations.astype('int')
 
     # Allocate space for results
     neg_mse = np.full((n_samples, n_neurons), np.nan)
     r_squared = np.full((n_samples, n_neurons), np.nan)
     snr = np.full((n_samples, n_neurons), np.nan)
 
-    fit_kw.setdefault('iterations', 50)
-    loss_hists = np.empty((n_samples, n_folds, fit_kw['iterations'] + 1))
+    loss_hists = np.full(
+        (n_samples, n_folds, iter_range[1] + 1), np.nan)
 
     # Set up indexing for train/test splits.
     neuron_indices = np.arange(n_neurons)
@@ -119,7 +137,8 @@ def paramsearch(
     best_scores = {k: -np.inf for k in range(*knot_range)}
 
     # Fit models.
-    for i, k, s, w in zip(trange(n_samples), knots, smoothness, warp_reg):
+    params = knots, smoothness, warp_reg, iterations, warp_iterations
+    for i, k, s, w, itr, w_itr in zip(trange(n_samples), *params):
 
         # Construct model object.
         if k == -1:
@@ -140,8 +159,11 @@ def paramsearch(
             trainset[testset] = False
 
             # Fit model to training set.
-            model.fit(binned[:, :, trainset], verbose=False, **fit_kw)
-            loss_hists[i, f] = model.loss_hist
+            fit_kw = dict(verbose=False, iterations=itr, warp_iterations=w_itr)
+            model.fit(binned[:, :, trainset], **fit_kw)
+
+            # Save learning curve
+            loss_hists[i, f, :(itr+1)] = model.loss_hist
 
             # Apply inverse warping functions to the test set.
             if data is None:
@@ -169,6 +191,8 @@ def paramsearch(
             'knots': knots[:(i+1)],
             'smoothness': smoothness[:(i+1)],
             'warp_reg': warp_reg[:(i+1)],
+            'iterations': iterations[:(i+1)],
+            'warp_iterations': warp_iterations[:(i+1)],
             'loss_hists': loss_hists[:(i+1)],
         }
         if outfile is not None:
