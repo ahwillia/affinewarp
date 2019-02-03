@@ -121,20 +121,20 @@ def paramsearch(
     iterations = iterations.astype('int')
     warp_iterations = warp_iterations.astype('int')
 
-    # Allocate space for results
-    neg_mse = np.full((n_samples, n_neurons), np.nan)
-    r_squared = np.full((n_samples, n_neurons), np.nan)
-    snr = np.full((n_samples, n_neurons), np.nan)
+    # Allocate space for metrics
+    test_metrics = {
+        'neg_mse': np.full((n_samples, n_neurons), np.nan),
+        'r_squared': np.full((n_samples, n_neurons), np.nan),
+        'snr': np.full((n_samples, n_neurons), np.nan),
+    }
+    train_metrics = deepcopy(test_metrics)
 
+    # Allocate space for learning curves
     loss_hists = np.full(
         (n_samples, n_folds, iter_range[1] + 1), np.nan)
 
     # Set up indexing for train/test splits.
     neuron_indices = np.arange(n_neurons)
-
-    # Allocate dictionaries that store the best models and scores.
-    best_models = {k: None for k in range(*knot_range)}
-    best_scores = {k: -np.inf for k in range(*knot_range)}
 
     # Fit models.
     params = knots, smoothness, warp_reg, iterations, warp_iterations
@@ -168,26 +168,27 @@ def paramsearch(
             # Apply inverse warping functions to the test set.
             if data is None:
                 testdata = binned[:, :, testset]
+                traindata = binned[:, :, trainset]
             else:
                 testdata = data.select_neurons(testset)
+                traindata = data.select_neurons(trainset)
 
-            # Evaluate metrics.
-            aligned_data = model.transform(testdata)
-            neg_mse[i, testset] = metrics.neg_mse(aligned_data, n_bins)
-            r_squared[i, testset] = metrics.r_squared(aligned_data, n_bins)
-            snr[i, testset] = metrics.snr(aligned_data, n_bins)
+            # Evaluate metrics for test set.
+            aligned_testdata = model.transform(testdata)
+            for sc in 'neg_mse', 'r_squared', 'snr':
+                test_metrics[sc][i, testset] = \
+                    getattr(metrics, sc)(aligned_testdata, n_bins)
 
-        # Store best model in each knot category.
-        mean_score = np.mean(neg_mse[i])
-        if mean_score > best_scores[k]:
-            best_scores[k] = mean_score
-            best_models[k] = deepcopy(model)
+            # Evaluate metrics for train set.
+            aligned_traindata = model.transform(traindata)
+            for sc in 'neg_mse', 'r_squared', 'snr':
+                train_metrics[sc][i, trainset] = \
+                    getattr(metrics, sc)(aligned_traindata, n_bins)
 
         # Save results
         results = {
-            'neg_mse': neg_mse[:(i+1)],
-            'r_squared': r_squared[:(i+1)],
-            'snr': snr[:(i+1)],
+            'test': test_metrics,
+            'train': train_metrics,
             'knots': knots[:(i+1)],
             'smoothness': smoothness[:(i+1)],
             'warp_reg': warp_reg[:(i+1)],
