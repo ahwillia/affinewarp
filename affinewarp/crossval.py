@@ -187,8 +187,8 @@ def paramsearch(
 
         # Save results
         results = {
-            'test': test_metrics,
-            'train': train_metrics,
+            'test': {k: v[:(i+1)] for k, v in test_metrics.items()},
+            'train': {k: v[:(i+1)] for k, v in train_metrics.items()},
             'knots': knots[:(i+1)],
             'smoothness': smoothness[:(i+1)],
             'warp_reg': warp_reg[:(i+1)],
