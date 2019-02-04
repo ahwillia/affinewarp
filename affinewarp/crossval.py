@@ -199,7 +199,7 @@ def paramsearch(
         if outfile is not None:
             dd.io.save(outfile, results)
 
-    return results, best_models
+    return results
 
 
 def heldout_transform(model, binned, data, transformed_neurons=None,
