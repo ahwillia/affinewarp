@@ -159,8 +159,8 @@ def paramsearch(
             test_neurons.sort()  # needed for SpikeData selection.
             train_neurons = np.ones_like(neuron_indices, bool)
             train_neurons[test_neurons] = False
-            trial_indices = np.ones_like(trial_indices, bool)
-            trial_indices[test_trials] = True
+            train_trials = np.ones_like(trial_indices, bool)
+            train_trials[test_trials] = True
 
             # Fit model to training set.
             fit_kw = {
