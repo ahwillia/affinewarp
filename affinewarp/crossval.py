@@ -192,7 +192,7 @@ def paramsearch(
 
         # Save results
         results = {
-            'train_loss': np.nanmean(train_loss, axis=1)[:(i+1)],
+            'train_loss': np.nanmean(train_loss[:(i+1)], axis=1),
             'test_loss': test_loss[:(i+1)],
             'knots': knots[:(i+1)],
             'smoothness': smoothness[:(i+1)],
