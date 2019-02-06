@@ -103,6 +103,7 @@ def paramsearch(
         )
 
     # Dataset dimensions.
+    n_trials = binned.shape[0]
     n_neurons = binned.shape[-1]
     n_bins = binned.shape[1]
 
@@ -121,20 +122,15 @@ def paramsearch(
     iterations = iterations.astype('int')
     warp_iterations = warp_iterations.astype('int')
 
-    # Allocate space for metrics
-    test_metrics = {
-        'neg_mse': np.full((n_samples, n_neurons), np.nan),
-        'r_squared': np.full((n_samples, n_neurons), np.nan),
-        'snr': np.full((n_samples, n_neurons), np.nan),
-    }
-    train_metrics = deepcopy(test_metrics)
-
-    # Allocate space for learning curves
+    # Allocate space for training and testing loss.
+    train_loss = np.full((n_samples, n_folds, n_neurons), np.nan)
+    test_loss = np.full((n_samples, n_neurons), np.nan)
     loss_hists = np.full(
         (n_samples, n_folds, iter_range[1] + 1), np.nan)
 
     # Set up indexing for train/test splits.
     neuron_indices = np.arange(n_neurons)
+    trial_indices = np.arange(n_trials)
 
     # Fit models.
     params = knots, smoothness, warp_reg, iterations, warp_iterations
@@ -149,46 +145,55 @@ def paramsearch(
 
         # Shuffle neuron order for train and test sets.
         np.random.shuffle(neuron_indices)
+        np.random.shuffle(trial_indices)
+
+        # Form data partitions.
+        neuron_splits = np.array_split(neuron_indices, n_folds)
+        trial_splits = np.array_split(trial_indices, n_folds)
+        splits = (neuron_splits, trial_splits)
 
         # Iterate over test sets.
-        for f, testset in enumerate(np.array_split(neuron_indices, n_folds)):
+        for f, (test_neurons, test_trials) in enumerate(zip(splits)):
 
             # Get indices for train set.
-            testset.sort()  # needed for SpikeData selection.
-            trainset = np.ones_like(neuron_indices, bool)
-            trainset[testset] = False
+            test_neurons.sort()  # needed for SpikeData selection.
+            train_neurons = np.ones_like(neuron_indices, bool)
+            train_neurons[test_neurons] = False
+            trial_indices = np.ones_like(trial_indices, bool)
+            trial_indices[test_trials] = True
 
             # Fit model to training set.
-            fit_kw = dict(verbose=False, iterations=itr, warp_iterations=w_itr)
-            model.fit(binned[:, :, trainset], **fit_kw)
+            fit_kw = {
+                "verbose": False,
+                "iterations": itr,
+                "warp_iterations": w_itr,
+                "neuron_idx": train_neurons,
+                "trial_idx": train_trials,
+            }
+            model.fit(binned, **fit_kw)
+            pred = model.predict()
 
             # Save learning curve
             loss_hists[i, f, :(itr+1)] = model.loss_hist
 
-            # Apply inverse warping functions to the test set.
-            if data is None:
-                testdata = binned[:, :, testset]
-                traindata = binned[:, :, trainset]
-            else:
-                testdata = data.select_neurons(testset)
-                traindata = data.select_neurons(trainset)
+            # Save loss on intersection of training neurons and trials.
+            train_pred = pred[train_trials][:, :, train_neurons]
+            train_data = binned[train_trials][:, :, train_neurons]
+            resid = train_pred - train_data
+            train_loss[i, f, train_neurons] = \
+                np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
 
-            # Evaluate metrics for test set.
-            aligned_testdata = model.transform(testdata)
-            for sc in 'neg_mse', 'r_squared', 'snr':
-                test_metrics[sc][i, testset] = \
-                    getattr(metrics, sc)(aligned_testdata, n_bins)
-
-            # Evaluate metrics for train set.
-            aligned_traindata = model.transform(traindata)
-            for sc in 'neg_mse', 'r_squared', 'snr':
-                train_metrics[sc][i, trainset] = \
-                    getattr(metrics, sc)(aligned_traindata, n_bins)
+            # Save loss on test set.
+            test_pred = pred[test_trials][:, :, test_neurons]
+            test_data = binned[test_trials][:, :, test_neurons]
+            resid = test_pred - test_data
+            test_loss[i, test_neurons] = \
+                np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
 
         # Save results
         results = {
-            'test': {k: v[:(i+1)] for k, v in test_metrics.items()},
-            'train': {k: v[:(i+1)] for k, v in train_metrics.items()},
+            'train_loss': np.nanmean(train_loss, axis=1)[:(i+1)],
+            'test_loss': test_loss[:(i+1)],
             'knots': knots[:(i+1)],
             'smoothness': smoothness[:(i+1)],
             'warp_reg': warp_reg[:(i+1)],
