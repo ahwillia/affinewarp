@@ -140,9 +140,8 @@ class PiecewiseWarping(object):
             raise ValueError("Initial warping functions must equal the number "
                              "of trials.")
 
-    def fit(self, data, iterations=50, warp_iterations=200, fit_template=True,
-            verbose=True, init_warps=None, overwrite_hist=True,
-            record_knots=False):
+    def fit(self, data, iterations=50, warp_iterations=200, verbose=True,
+            init_warps=None, trial_idx=slice(None), neuron_idx=slice(None)):
         """
         Fits warping functions and model template to data.
 
@@ -150,28 +149,24 @@ class PiecewiseWarping(object):
         ----------
         data : ndarray
             3d array (trials x times x features) holding signals to be fit.
-        iterations : int
-            Number of iterations before stopping
-        warp_iterations : int
+        iterations (optional) : int
+            Number of iterations before stopping.
+        warp_iterations (optional) : int
             Number of inner iterations to fit warping functions.
         verbose (optional) : bool
             Whether to display progressbar while fitting. (Default: True)
-        init_warps (optional) : PiecewiseWarping instance, ShiftWarping instance, or None.
-            Model specifying initial warps. If None, warps are initialized to
-            the identity line. (Default: None)
-        fit_template (optional): bool
-            If True, fit template and warps. If False, only fit warps.
-            (Default: True)
-        overwrite_loss_hist (optional): bool
-            If True, reinitializes ``self.loss_hist`` to an empty list before
-            fitting. If False, new loss values are appended to the existing
-            array. (Default: True)
-        record_knots (optional): bool
-            If True, ``self.x_knots`` and ``self.y_knots`` are recorded over
-            optimization in ``self._knot_hist``. Useful for debugging
-            optimization (Default: False).
+        init_warps (optional) : PiecewiseWarping instance, ShiftWarping
+            instance, or None. Model specifying initial warps. If None, warps
+            are initialized to the identity line. (Default: None)
+        trial_idx (optional) : indices
+            Indices along first dimension of `data` array. If provided, the
+            warping template is only fit to these trials. By default, all
+            trials are used for fitting.
+        neuron_idx (optional) : indices
+            Indices along last dimension of `data` array. If provided, the
+            warping functions are only fit to these units. By default, all
+            units are used for fitting.
         """
-        self.initialize_warps(data.shape[0], init_warps)
 
         # Check input data is provided as a dense array (binned spikes).
         if not isinstance(data, np.ndarray):
@@ -182,13 +177,13 @@ class PiecewiseWarping(object):
         if data.ndim != 3:
             raise _DATA_ERROR
 
-        # Allocate storage for loss.
+        # Allocate storage.
         K, T, N = data.shape
-        self._initialize_storage(K, overwrite_hist)
+        self.initialize_warps(K, init_warps)
+        self._initialize_storage(K)
 
         # Ensure template is initialized.
-        if fit_template or (self.template is None):
-            self._fit_template(data)
+        self._fit_template(data[:, :, neuron_idx])
 
         # Record initial loss before optimizing.
         self._record_loss(data)
@@ -198,11 +193,9 @@ class PiecewiseWarping(object):
         pbar = trange(iterations) if verbose else range(iterations)
         self._knot_hist = []
         for it in pbar:
-            self._fit_warps(data, warp_iterations)
-            self._fit_template(data) if fit_template else None
+            self._fit_warps(data[:, :, neuron_idx], warp_iterations)
+            self._fit_template(data[trial_idx, :, :])
             self._record_loss(data)
-            if record_knots:
-                self._knot_hist.append((self.x_knots.copy(), self.y_knots.copy()))
             if verbose:
                 raw_imp = (self.loss_hist[0] - self.loss_hist[-1])
                 rel_imp = 100 * raw_imp / self.loss_hist[0]
@@ -477,14 +470,14 @@ class PiecewiseWarping(object):
         self.y_knots = np.column_stack([intercepts, intercepts + slopes])
 
         # find best template given these knots and compute model loss
-        self._initialize_storage(data.shape[0], True)
+        self._initialize_storage(data.shape[0])
         self._fit_template(data)
         self._record_loss(data)
 
     def assert_fitted(self):
         check_is_fitted(self, ('x_knots', 'y_knots', 'template'))
 
-    def _initialize_storage(self, n_trials, overwrite_hist):
+    def _initialize_storage(self, n_trials):
         """
         Initializes arrays to hold loss per trial.
         """
@@ -492,10 +485,9 @@ class PiecewiseWarping(object):
         self._penalties = np.zeros(n_trials)
         self._new_losses = np.empty(n_trials)
         self._new_penalties = np.empty(n_trials)
-        if overwrite_hist:
-            self.loss_hist = []
-            self.penalty_hist = []
-            self.objective_hist = []
+        self.loss_hist = []
+        self.penalty_hist = []
+        self.objective_hist = []
 
     def _record_loss(self, data):
         # Compute and record reconstruction loss.

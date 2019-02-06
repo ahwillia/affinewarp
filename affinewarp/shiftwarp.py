@@ -40,6 +40,8 @@ class ShiftWarping(object):
             warping templates.
         l2_reg_scale : int or float
             Penalty strength on L2 norm of the warping template.
+        loss : str
+            Specifies loss function, either 'quadratic' or 'poisson'
         """
 
         if (maxlag < 0) or (maxlag > .5):
@@ -54,12 +56,39 @@ class ShiftWarping(object):
 
         if loss == 'quadratic':
             self._shifted_loss = _compute_shifted_quad_loss
+            self._eval_loss = _eval_quad_loss
         elif loss == 'poisson':
             self._shifted_loss = _compute_shifted_poiss_loss
+            self._eval_loss = _eval_poiss_loss
+        else:
+            raise ValueError(
+                "'loss' parameter should be one of ('quadratic', 'poisson').")
 
-    def fit(self, data, iterations=20, verbose=True, warp_iterations=None):
+    def fit(self, data, iterations=20, verbose=True, warp_iterations=None,
+            trial_idx=slice(None), neuron_idx=slice(None)):
         """
         Fit shift warping to data.
+
+        Parameters
+        ----------
+        data : ndarray
+            Collection of time series with shape (num_trials, num_timepoints,
+            num_units).
+        iterations : int
+            Number of iterations to run.
+        verbose : bool
+            If True, prints progress bar. Otherwise, no output is displayed.
+        warp_iterations : int or None
+            This is ignored, used to provide a consistent API with
+            PiecewiseWarping.
+        trial_idx : indices
+            Indices along first dimension of `data` array. If provided, the
+            warping template is only fit to these trials. By default, all
+            trials are used for fitting.
+        neuron_idx : indices
+            Indices along last dimension of `data` array. If provided, the
+            warping functions are only fit to these units. By default, all
+            units are used for fitting.
         """
 
         # Check input.
@@ -70,63 +99,71 @@ class ShiftWarping(object):
         # data dimensions:
         #   K = number of trials
         #   T = number of timepoints
-        #   N = number of features/neurons
+        #   N = number of features/units
         #   L = number of time lags/shifts to search over in each direction.
         K, T, N = data.shape
         L = int(self.maxlag * T)
 
         # Warps are penalized based on distance from identity. These penalties
         # can be pre-computed up front.
-        warp_penalty = self.warp_reg_scale * \
-            np.abs(np.linspace(-L/T, L/T, 2*L+1)[None, :])
+        self._warp_penalty = self.warp_reg_scale * \
+            np.abs(np.linspace(-L / T, L / T, 2 * L + 1)[None, :])
 
-        # Initialize shifts.
+        # Initialize shifts and model template.
         self.shifts = np.zeros(K, dtype=int)
-
-        # Initialize model template.
         self._fit_template(data)
 
-        # Compute the model loss over all shifts.
-        losses = np.zeros((K, 2*L+1))
-        self._shifted_loss(data, self.template, losses)
-        losses /= (T * N)
-
-        # Initialize learning curve with zero warping.
-        self.loss_hist = [losses[:, L].mean()]
+        # Initialize loss history
+        if self.loss == "quadratic":
+            resid = self.template[None, :, :] - data
+            self.loss_hist = [np.mean(resid ** 2)]
+        else:
+            z1 = np.exp(self.template)[None, :, :]
+            z2 = data * self.template[None, :, :]
+            self.loss_hist = [np.mean(z1 - z2)]
 
         # progress bar
         pbar = trange(iterations) if verbose else range(iterations)
 
         # main loop
         for i in pbar:
-
-            # Find the best shift for each trial.
-            s = np.argmin(losses + warp_penalty, axis=1)
-            self.shifts = -L + s
-
-            # Compute the loss after shifting
-            total_loss = np.mean(losses[np.arange(K), s])
-            self.loss_hist.append(total_loss)
+            # Update parameters and compute loss.
+            self._fit_warps(data[:, :, neuron_idx])
+            self._fit_template(data[trial_idx, :, :])
+            self._record_loss(data)
 
             # update loss display
             if verbose:
-                pbar.set_description('Loss: {0:.2f}'.format(total_loss))
-
-            # Re-fit model template and re-compute losses over all shifts.
-            if (i + 1) < iterations:
-                self._fit_template(data)
-                losses.fill(0.0)
-                self._shifted_loss(data, self.template, losses)
-                losses /= (T * N)
+                pbar.set_description(
+                    'Loss: {0:.2f}'.format(self.loss_hist[-1]))
 
         # compute shifts as a fraction of trial length
         self.fractional_shifts = self.shifts / T
+        self._losses = None
+
+    def _fit_warps(self, data):
+        """Updates shift parameters."""
+
+        # Data dimensions.
+        K, T, N = data.shape
+        L = int(self.maxlag * T)
+
+        # Compute reconstruction errors for each shift.
+        losses = np.zeros((K, 2 * L + 1))
+        self._shifted_loss(data, self.template, losses)
+
+        # Compute total objective and find optimal shifts.
+        obj = losses + self._warp_penalty
+        self.shifts = np.argmin(obj, axis=1) - L
 
     def _fit_template(self, data):
+        """Updates template firing rates."""
+
+        # Data dimensions.
         K, T, N = data.shape
 
         if self.loss == 'quadratic':
-            DtD = _diff_gramian(T, self.smoothness_reg_scale * K, self.l2_reg_scale *K)
+            DtD = _diff_gramian(T, self.smoothness_reg_scale * K, self.l2_reg_scale * K)
             WtW = np.zeros((3, T))
             WtX = np.zeros((T, N))
             _fill_WtW(self.shifts, WtW[-1])
@@ -150,6 +187,11 @@ class ShiftWarping(object):
                                           method='newton-cg',
                                           options=dict(maxiter=1))
             self.template = (opt.x).reshape(T, N)
+
+    def _record_loss(self, data):
+        """Computes loss on all data."""
+        loss = self._eval_loss(data, self.template, self.shifts)
+        self.loss_hist.append(loss)
 
     def argsort_warps(self):
         """
@@ -317,6 +359,51 @@ def _warp_data(data, shifts, out):
 
 
 @numba.jit(nopython=True, parallel=True)
+def _eval_quad_loss(data, template, shifts):
+    K, T, N = data.shape
+    total_loss = 0.0
+
+    for k, s in zip(range(K), shifts):
+        for t in range(T):
+
+            # shifted index
+            i = t - s
+            if i < 0:
+                i = 0
+            elif i >= T:
+                i = T-1
+
+            # add loss for each neuron
+            for n in range(N):
+                total_loss += ((data[k, t, n] - template[i, n]) ** 2)
+
+    return total_loss / data.size
+
+
+@numba.jit(nopython=True, parallel=True)
+def _eval_poiss_loss(data, template, shifts):
+    K, T, N = data.shape
+    total_loss = 0.0
+    exp_template = np.exp(template)
+
+    for k, s in zip(range(K), shifts):
+        for t in range(T):
+
+            # shifted index
+            i = t - s
+            if i < 0:
+                i = 0
+            elif i >= T:
+                i = T-1
+
+            # add loss for each neuron
+            for n in range(N):
+                total_loss += (exp_template[i, n] - template[i, n] * data[k, t, n])
+
+    return total_loss / data.size
+
+
+@numba.jit(nopython=True, parallel=True)
 def _compute_shifted_quad_loss(data, template, losses):
 
     K, T, N = data.shape
@@ -335,7 +422,7 @@ def _compute_shifted_quad_loss(data, template, losses):
 
                 # quadratic loss
                 for n in range(N):
-                    losses[k, l+L] += (data[k, t, n] - template[i, n])**2
+                    losses[k, l+L] += ((data[k, t, n] - template[i, n]) ** 2)
 
 
 @numba.jit(nopython=True, parallel=True)
@@ -359,4 +446,4 @@ def _compute_shifted_poiss_loss(data, template, losses):
 
                 # poisson loss
                 for n in range(N):
-                    losses[k, l+L] += exp_template[i, n] - template[i, n] * data[k, t, n]
+                    losses[k, l+L] += (exp_template[i, n] - template[i, n] * data[k, t, n])
