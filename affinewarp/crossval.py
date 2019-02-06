@@ -153,7 +153,7 @@ def paramsearch(
         splits = (neuron_splits, trial_splits)
 
         # Iterate over test sets.
-        for f, (test_neurons, test_trials) in enumerate(zip(splits)):
+        for f, (test_neurons, test_trials) in enumerate(zip(*splits)):
 
             # Get indices for train set.
             test_neurons.sort()  # needed for SpikeData selection.
