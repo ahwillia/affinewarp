@@ -160,7 +160,7 @@ def paramsearch(
             train_neurons = np.ones_like(neuron_indices, bool)
             train_neurons[test_neurons] = False
             train_trials = np.ones_like(trial_indices, bool)
-            train_trials[test_trials] = True
+            train_trials[test_trials] = False
 
             # Fit model to training set.
             fit_kw = {
