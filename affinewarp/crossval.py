@@ -12,7 +12,7 @@ import deepdish as dd
 
 
 def paramsearch(
-        binned, n_samples, data=None, n_folds=5, knot_range=(-1, 2),
+        binned, n_samples, n_folds=5, knot_range=(-1, 2),
         smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
         iter_range=(50, 300), warp_iter_range=(50, 300), outfile=None):
     """
@@ -29,8 +29,6 @@ def paramsearch(
         trials x timepoints x neurons binned spikes
     n_samples : int
         Number of parameter settings to try per fold.
-    data : SpikeData
-        Holds unbinned spike times.
     n_folds : int
         Number of folds used for cross-validation.
     knot_range : tuple of ints
@@ -94,13 +92,6 @@ def paramsearch(
         Dictionary mapping number of knots (int) to a ShiftWarping or
         PiecewiseWarping model instance.
     """
-
-    # Check inputs.
-    if (data is not None) and (data.n_neurons != binned.shape[-1]):
-        raise ValueError(
-            "Expected binned spikes and SpikeData object to have the same "
-            "number of neurons."
-        )
 
     # Dataset dimensions.
     n_trials = binned.shape[0]
@@ -180,15 +171,17 @@ def paramsearch(
             train_pred = pred[train_trials][:, :, train_neurons]
             train_data = binned[train_trials][:, :, train_neurons]
             resid = train_pred - train_data
-            train_loss[i, f, train_neurons] = \
-                np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
+            num = np.linalg.norm(resid, axis=(0, 1))
+            denom = np.linalg.norm(train_data, axis=(0, 1))
+            train_loss[i, f, train_neurons] = num / denom
 
             # Save loss on test set.
             test_pred = pred[test_trials][:, :, test_neurons]
             test_data = binned[test_trials][:, :, test_neurons]
             resid = test_pred - test_data
-            test_loss[i, test_neurons] = \
-                np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
+            num = np.linalg.norm(resid, axis=(0, 1))
+            denom = np.linalg.norm(test_data, axis=(0, 1))
+            test_loss[i, test_neurons] = num / denom
 
         # Save results
         results = {

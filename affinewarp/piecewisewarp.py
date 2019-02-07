@@ -183,7 +183,7 @@ class PiecewiseWarping(object):
         self._initialize_storage(K)
 
         # Ensure template is initialized.
-        self._fit_template(data[:, :, neuron_idx])
+        self._fit_template(data, trial_idx)
 
         # Record initial loss before optimizing.
         self._record_loss(data)
@@ -193,8 +193,8 @@ class PiecewiseWarping(object):
         pbar = trange(iterations) if verbose else range(iterations)
         self._knot_hist = []
         for it in pbar:
-            self._fit_warps(data[:, :, neuron_idx], warp_iterations)
-            self._fit_template(data[trial_idx, :, :])
+            self._fit_warps(data, warp_iterations, neuron_idx)
+            self._fit_template(data, trial_idx)
             self._record_loss(data)
             if verbose:
                 raw_imp = (self.loss_hist[0] - self.loss_hist[-1])
@@ -202,33 +202,38 @@ class PiecewiseWarping(object):
                 pbar.set_description(
                     "Loss improvement: {0:.2f}%".format(rel_imp))
 
-    def _fit_warps(self, data, iterations):
+    def _fit_warps(self, data, warp_iterations, neuron_idx):
         """Fit warping functions by local random search.
 
         Parameters
         ----------
         data : ndarray
             3d array (trials x times x features) holding time series to be fit.
-        iterations : int
+        warp_iterations : int
             Number of iterations to optimize warps.
+        neuron_idx : indices
+            Specifies subset of neurons to fit warps on.
         """
         storage = np.empty((data.shape[0], 4, self.n_knots + 2))
-        self._warp_optimizer(self.x_knots, self.y_knots, self.template, data,
-                             self.warp_reg_scale, self._losses,
-                             self._penalties, iterations, self.n_restarts,
-                             self.min_temp, self.max_temp, storage)
+        self._warp_optimizer(
+            self.x_knots, self.y_knots, self.template[:, neuron_idx],
+            data[:, :, neuron_idx], self.warp_reg_scale, self._losses,
+            self._penalties, warp_iterations, self.n_restarts,
+            self.min_temp, self.max_temp, storage)
 
-    def _fit_template(self, data):
+    def _fit_template(self, data, trial_idx):
         """Fit warping template.
 
         Parameters
         ----------
         data : ndarray
             3d array (trials x times x features) holding time series to be fit.
+        trial_idx : indices
+            Specifies subset of trials to fit template on.
         """
         self.template = self._template_optimizer(
-            self.x_knots, self.y_knots, self.template, data,
-            self.smoothness_reg_scale, self.l2_reg_scale)
+            self.x_knots[trial_idx], self.y_knots[trial_idx], self.template,
+            data[trial_idx], self.smoothness_reg_scale, self.l2_reg_scale)
 
     def predict(self):
         """
