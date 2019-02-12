@@ -221,7 +221,7 @@ class PiecewiseWarping(object):
             self._penalties, warp_iterations, self.n_restarts,
             self.min_temp, self.max_temp, storage)
 
-    def _fit_template(self, data, trial_idx):
+    def _fit_template(self, data, trial_idx=slice(None)):
         """Fit warping template.
 
         Parameters

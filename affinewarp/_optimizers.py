@@ -359,7 +359,7 @@ def warp_penalties(X, Y, storage):
     return storage
 
 
-# @numba.jit(nopython=True)
+@numba.jit(nopython=True)
 def warp_to_sparse_matrix(X, Y, rows, cols, vals):
 
     # initialize line segement for interpolation
@@ -524,6 +524,19 @@ class PoissonObjective:
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 
         return self.hess_out.ravel()
+
+
+def nowarp_template(X, smoothness_scale, l2_scale, loss='quadratic'):
+    """
+    Solves for the optimal template assuming no warping.
+    """
+    K, T, N = X.shape
+    if loss == 'quadratic':
+        A = _diff_gramian(T, smoothness_reg_scale * K, l2_reg_scale * K)
+        B = np.sum(X, axis=0)
+        return sci.linalg.solveh_banded(A, B)
+    else:
+        raise NotImplementedError
 
 
 def _diff_gramian(T, smoothness_scale, l2_scale):

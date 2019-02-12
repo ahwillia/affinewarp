@@ -9,6 +9,70 @@ from .piecewisewarp import PiecewiseWarping
 from .shiftwarp import ShiftWarping
 from . import metrics
 import deepdish as dd
+from ._optimizers import nowarp_template
+EPS = np.finfo(float).eps
+
+
+def baseline_performance(
+        binned, n_samples, smoothness_range=(1e-2, 1e2), n_folds=5):
+    """
+    Computes testing and training error over a range of template
+    smoothness regularization scales, assuming no warping is done.
+
+    Parameters
+    ----------
+    binned : ndarray
+        trials x timepoints x neurons binned spikes
+    n_samples : int
+        Number of smoothness regularization strengths, log uniformly
+        distributed.
+    n_folds : int
+        Number of folds used for cross-validation.
+
+    Notes
+    -----
+    Only implemented for quadratic loss.
+    """
+
+    # Use default L2 regularization for PiecewiseWarping.
+    l2_reg_scale = 1e-7
+
+    # Grid search over logarithmic scale.
+    smoothness = np.logspace(*np.log10(smoothness_range), n_samples)
+
+    # Allocate space for results.
+    train_loss = np.empty((n_samples, n_folds))
+    test_loss = np.empty((n_samples, n_folds))
+
+    # Fit models.
+    for i, s in zip(trange(n_samples), smoothness):
+
+        # Shuffle neuron order for train and test sets.
+        trial_indices = np.random.permutation(binned.shape[0])
+
+        # Form data partitions.
+        splits = np.array_split(trial_indices, n_folds)
+
+        for f, test_trials in enumerate(splits):
+
+            # Determine trials for training.
+            test_data = binned[test_trials]
+            train_data = binned[np.setdiff1d(trial_indices, test_trials)]
+
+            # Fit template.
+            template = nowarp_template(train_data, s, l2_scale)
+
+            # Compute and save loss on training set.
+            num = np.linalg.norm(template - train_data, axis=(0, 1))
+            denom = np.linalg.norm(train_data, axis=(0, 1)) + EPS
+            train_loss[i, f] = num / denom
+
+            # Compute and save loss on testing set.
+            num = np.linalg.norm(template - test_data, axis=(0, 1))
+            denom = np.linalg.norm(test_data, axis=(0, 1)) + EPS
+            test_loss[i, f] = num / denom
+
+    return smoothness, train_loss, test_loss
 
 
 def paramsearch(
@@ -91,6 +155,10 @@ def paramsearch(
     best_models : dict
         Dictionary mapping number of knots (int) to a ShiftWarping or
         PiecewiseWarping model instance.
+
+    Notes
+    -----
+    Only implemented for quadratic loss.
     """
 
     # Dataset dimensions.
@@ -172,7 +240,7 @@ def paramsearch(
             train_data = binned[train_trials][:, :, train_neurons]
             resid = train_pred - train_data
             num = np.linalg.norm(resid, axis=(0, 1))
-            denom = np.linalg.norm(train_data, axis=(0, 1))
+            denom = np.linalg.norm(train_data, axis=(0, 1)) + EPS
             train_loss[i, f, train_neurons] = num / denom
 
             # Save loss on test set.
@@ -180,7 +248,7 @@ def paramsearch(
             test_data = binned[test_trials][:, :, test_neurons]
             resid = test_pred - test_data
             num = np.linalg.norm(resid, axis=(0, 1))
-            denom = np.linalg.norm(test_data, axis=(0, 1))
+            denom = np.linalg.norm(test_data, axis=(0, 1)) + EPS
             test_loss[i, test_neurons] = num / denom
 
         # Save results
