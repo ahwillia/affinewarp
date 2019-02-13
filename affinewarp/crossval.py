@@ -95,7 +95,7 @@ def baseline_performance(
 
 
 def paramsearch(
-        binned, n_samples, n_valid_samples, n_train_folds=3, n_valid_folds=1,
+        binned, samples_per_knot, n_valid_samples, n_train_folds=3, n_valid_folds=1,
         n_test_folds=1, knot_range=(-1, 2), smoothness_range=(1e-2, 1e2),
         warpreg_range=(1e-2, 1e1), iter_range=(50, 300),
         warp_iter_range=(50, 300), outfile=None):
@@ -111,8 +111,8 @@ def paramsearch(
     ----------
     binned : ndarray
         trials x timepoints x neurons binned spikes
-    n_samples : int
-        Number of cross-validation runs.
+    samples_per_knot : int
+        Number of cross-validation runs per knot.
     n_valid_samples : int
         Number of inner samples to optimize smoothness and warp
         complexity regularization parameters on validation set.
@@ -124,8 +124,7 @@ def paramsearch(
         Number of folds used for testing.
     knot_range : tuple of ints
         Specifies [minimum, maximum) number of knots in warping
-        functions. Uniform random integers over this includive interval
-        are sampled for each model. A value of -1 denotes a shift-only
+        functions. A value of -1 denotes a shift-only
         warping model; a value of 0 denotes a linear warping model (no
         interior knots); etc.
     smoothness_range : tuple of floats
@@ -216,7 +215,8 @@ def paramsearch(
         return num / denom
 
     # Randomly draw all parameter settings for each model.
-    knots = np.random.randint(*knot_range, size=n_samples)
+    knots = np.tile(np.arange(*knot_range), samples_per_knot)
+    n_samples = len(knots)
 
     smoothness = lg_unif(
         smoothness_range, size=(n_samples, n_valid_samples))
@@ -278,7 +278,7 @@ def paramsearch(
         valid_loss[i, j] = _loss(pred, binned, val_trials, val_units)
 
         # Save loss on test set if validation loss is optimal
-        if np.argmin(valid_loss[i] == j):
+        if np.argmin(valid_loss[i]) == j:
             test_loss[i] = _loss(pred, binned, test_trials, test_units)
 
         # Save results.
