@@ -29,6 +29,21 @@ def baseline_performance(
     n_folds : int
         Number of folds used for cross-validation.
 
+    Returns
+    -------
+    results : dict
+        Dictionary holding results:
+
+        "smoothness" : (n_samples, n_valid_samples) array holding sampled
+            regularization strengths on warping templates, penalizing
+            roughness.
+
+        "train_loss": (n_samples, n_valid_samples) array holding model loss
+            on the training set.
+
+        "test_loss": (n_samples,) array holding model loss on the test set.
+
+
     Notes
     -----
     Only implemented for quadratic loss.
@@ -72,7 +87,11 @@ def baseline_performance(
             denom = np.linalg.norm(test_data) + EPS
             test_loss[i, f] = num / denom
 
-    return smoothness, train_loss, test_loss
+    return {
+        "smoothness": smoothness,
+        "train_loss": train_loss,
+        "test_loss": test_loss,
+    }
 
 
 def paramsearch(
@@ -137,7 +156,7 @@ def paramsearch(
     Returns
     -------
     results : dict
-        Dictionary holding results on training set:
+        Dictionary holding results:
 
         "knots" : (n_samples,) array holding number of knots in piecewise
             linear warping function for each evaluated model.
