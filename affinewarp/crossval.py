@@ -1,5 +1,6 @@
 """Validation methods for time warping models."""
 
+import itertools
 import numpy as np
 from tqdm import tqdm, trange
 from copy import deepcopy
@@ -8,7 +9,6 @@ from .utils import upsample
 from .piecewisewarp import PiecewiseWarping
 from .shiftwarp import ShiftWarping
 from . import metrics
-import deepdish as dd
 from ._optimizers import nowarp_template
 EPS = np.finfo(float).eps
 
@@ -35,14 +35,14 @@ def baseline_performance(
     """
 
     # Use default L2 regularization for PiecewiseWarping.
-    l2_reg_scale = 1e-7
+    l2_scale = 1e-7
 
     # Grid search over logarithmic scale.
     smoothness = np.logspace(*np.log10(smoothness_range), n_samples)
 
     # Allocate space for results.
-    train_loss = np.empty((n_samples, n_folds))
-    test_loss = np.empty((n_samples, n_folds))
+    train_loss = np.zeros((n_samples, n_folds))
+    test_loss = np.zeros((n_samples, n_folds))
 
     # Fit models.
     for i, s in zip(trange(n_samples), smoothness):
@@ -63,22 +63,23 @@ def baseline_performance(
             template = nowarp_template(train_data, s, l2_scale)
 
             # Compute and save loss on training set.
-            num = np.linalg.norm(template - train_data, axis=(0, 1))
-            denom = np.linalg.norm(train_data, axis=(0, 1)) + EPS
+            num = np.linalg.norm(template - train_data)
+            denom = np.linalg.norm(train_data) + EPS
             train_loss[i, f] = num / denom
 
             # Compute and save loss on testing set.
-            num = np.linalg.norm(template - test_data, axis=(0, 1))
-            denom = np.linalg.norm(test_data, axis=(0, 1)) + EPS
+            num = np.linalg.norm(template - test_data)
+            denom = np.linalg.norm(test_data) + EPS
             test_loss[i, f] = num / denom
 
     return smoothness, train_loss, test_loss
 
 
 def paramsearch(
-        binned, n_samples, n_folds=5, knot_range=(-1, 2),
-        smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
-        iter_range=(50, 300), warp_iter_range=(50, 300), outfile=None):
+        binned, n_samples, n_valid_samples, n_train_folds=3, n_valid_folds=1,
+        n_test_folds=1, knot_range=(-1, 2), smoothness_range=(1e-2, 1e2),
+        warpreg_range=(1e-2, 1e1), iter_range=(50, 300),
+        warp_iter_range=(50, 300), outfile=None):
     """
     Performs randomized search over hyperparameters on warping
     functions. For each set of randomly sampled parameters, neurons
@@ -92,9 +93,16 @@ def paramsearch(
     binned : ndarray
         trials x timepoints x neurons binned spikes
     n_samples : int
-        Number of parameter settings to try per fold.
-    n_folds : int
-        Number of folds used for cross-validation.
+        Number of cross-validation runs.
+    n_valid_samples : int
+        Number of inner samples to optimize smoothness and warp
+        complexity regularization parameters on validation set.
+    n_train_folds : int
+        Number of folds used for training.
+    n_valid_folds : int
+        Number of folds used for validation.
+    n_test_folds : int
+        Number of folds used for testing.
     knot_range : tuple of ints
         Specifies [minimum, maximum) number of knots in warping
         functions. Uniform random integers over this includive interval
@@ -129,141 +137,149 @@ def paramsearch(
     Returns
     -------
     results : dict
-        Dictionary holding sampled model parameters and scores. Key-value
-        pairs are:
-
-        "neg_mse" : (n_samples x n_neurons) array holding negative mean-squared
-        error score for each neuron.
-
-        "r_squared" : (n_samples x n_neurons) array holding R-squared score
-        for each each neuron.
-
-        "snr" : (n_samples x n_neurons) array holding signal-to-noise ratio
-        score for each each neuron.
+        Dictionary holding results on training set:
 
         "knots" : (n_samples,) array holding number of knots in piecewise
-        linear warping function for each evaluated model.
+            linear warping function for each evaluated model.
 
-        "smoothness" : (n_samples,) array holding sampled regularization
-        strengths on warping templates, penalizing roughness.
+        "smoothness" : (n_samples, n_valid_samples) array holding sampled
+            regularization strengths on warping templates, penalizing
+            roughness.
 
-        "warp_reg" : (n_samples,) array holding sampled regularization
-            strengths on warping function distance from identity.
-        "loss_hists" : (n_samples, n_folds, n_iterations + 1) array
-            holding the learning curves for all models.
+        "warp_reg" : (n_samples, n_valid_samples) array holding sampled
+            regularization strengths on warping function distance from
+            identity.
 
-    best_models : dict
-        Dictionary mapping number of knots (int) to a ShiftWarping or
-        PiecewiseWarping model instance.
+        "iterations" : (n_samples, n_valid_samples) array holding number
+            of model optimization steps.
+
+        "warp_iterations" : (n_samples, n_valid_samples) array holding number
+            of inner iteration steps for fitting warping functions.
+
+        "train_loss": (n_samples, n_valid_samples) array holding model loss
+            on the training set.
+
+        "valid_loss": (n_samples, n_valid_samples) array holding model loss
+            on the validation set.
+
+        "test_loss": (n_samples,) array holding model loss on the test set.
+
+        "loss_hists" : (n_samples, n_valid_samples, n_iterations + 1) array
+            holding the learning curves for all models. The loss is computed
+            over the combined train and validation set.
 
     Notes
     -----
     Only implemented for quadratic loss.
     """
 
-    # Dataset dimensions.
-    n_trials = binned.shape[0]
-    n_neurons = binned.shape[-1]
-    n_bins = binned.shape[1]
+    # Dataset dimensions (trials x timepoints x units).
+    K, T, N = binned.shape
 
-    # Enumerate all parameter settings for each model.
+    # Samples from a log uniform distribution.
+    def lg_unif(rng, size):
+        return 10 ** np.random.uniform(*np.log10(rng), size=size)
+
+    # Draws random partition of indices.
+    def partition(indices, n_folds_1, n_folds_2):
+        ind = indices.copy()
+        np.random.shuffle(ind)
+        splits = np.array_split(ind, n_folds_1 + n_folds_2)
+        p1 = np.concatenate(splits[:n_folds_1])
+        p2 = np.concatenate(splits[n_folds_1:])
+        return p1, p2
+
+    # Compute loss on a subset of trials and units
+    def _loss(pred, targ, kk, nn):
+        resid = pred[kk][:, :, nn] - targ[kk][:, :, nn]
+        num = np.linalg.norm(resid)
+        denom = np.linalg.norm(targ[kk][:, :, nn]) + EPS
+        return num / denom
+
+    # Randomly draw all parameter settings for each model.
     knots = np.random.randint(*knot_range, size=n_samples)
-    smoothness = 10 ** np.random.uniform(*np.log10(smoothness_range),
-                                         size=n_samples)
-    warp_reg = 10 ** np.random.uniform(*np.log10(warpreg_range),
-                                       size=n_samples)
-    iterations = 10 ** np.random.uniform(*np.log10(iter_range),
-                                         size=n_samples)
-    warp_iterations = 10 ** np.random.uniform(*np.log10(warp_iter_range),
-                                              size=n_samples)
 
-    # Convert sampled iterations to integers.
-    iterations = iterations.astype('int')
-    warp_iterations = warp_iterations.astype('int')
+    smoothness = lg_unif(
+        smoothness_range, size=(n_samples, n_valid_samples))
+    warp_reg = lg_unif(
+        warpreg_range, size=(n_samples, n_valid_samples))
+    iterations = lg_unif(
+        iter_range, size=(n_samples, n_valid_samples)).astype('int')
+    warp_iterations = lg_unif(
+        warp_iter_range, size=(n_samples, n_valid_samples)).astype('int')
 
-    # Allocate space for training and testing loss.
-    train_loss = np.full((n_samples, n_folds, n_neurons), np.nan)
-    test_loss = np.full((n_samples, n_neurons), np.nan)
+    # Initialize arrays to store losses.
+    train_loss = np.empty((n_samples, n_valid_samples))
+    valid_loss = np.full((n_samples, n_valid_samples), np.inf)
+    test_loss = np.empty(n_samples)
     loss_hists = np.full(
-        (n_samples, n_folds, iter_range[1] + 1), np.nan)
+        (n_samples, n_valid_samples, iter_range[1] + 1), np.nan)
 
-    # Set up indexing for train/test splits.
-    neuron_indices = np.arange(n_neurons)
-    trial_indices = np.arange(n_trials)
+    progress_bar = tqdm(total=n_samples * n_valid_samples)
 
-    # Fit models.
-    params = knots, smoothness, warp_reg, iterations, warp_iterations
-    for i, k, s, w, itr, w_itr in zip(trange(n_samples), *params):
+    for i, j in itertools.product(range(n_samples), range(n_valid_samples)):
 
-        # Construct model object.
-        if k == -1:
-            model = ShiftWarping(smoothness_reg_scale=s, warp_reg_scale=w)
-        else:
-            model = PiecewiseWarping(
-                n_knots=k, smoothness_reg_scale=s, warp_reg_scale=w)
+        # Update train - validation - test sets.
+        if j == 0:
+            train_val_units, test_units = partition(
+                np.arange(N), n_train_folds + n_valid_folds, n_test_folds)
+            train_val_trials, test_trials = partition(
+                np.arange(K), n_train_folds + n_valid_folds, n_test_folds)
 
-        # Shuffle neuron order for train and test sets.
-        np.random.shuffle(neuron_indices)
-        np.random.shuffle(trial_indices)
+            train_units, val_units = partition(
+                train_val_units, n_train_folds, n_valid_folds)
+            train_trials, val_trials = partition(
+                train_val_trials, n_train_folds, n_valid_folds)
 
-        # Form data partitions.
-        neuron_splits = np.array_split(neuron_indices, n_folds)
-        trial_splits = np.array_split(trial_indices, n_folds)
-        splits = (neuron_splits, trial_splits)
-
-        # Iterate over test sets.
-        for f, (test_neurons, test_trials) in enumerate(zip(*splits)):
-
-            # Get indices for train set.
-            test_neurons.sort()  # needed for SpikeData selection.
-            train_neurons = np.ones_like(neuron_indices, bool)
-            train_neurons[test_neurons] = False
-            train_trials = np.ones_like(trial_indices, bool)
-            train_trials[test_trials] = False
-
-            # Fit model to training set.
-            fit_kw = {
-                "verbose": False,
-                "iterations": itr,
-                "warp_iterations": w_itr,
-                "neuron_idx": train_neurons,
-                "trial_idx": train_trials,
-            }
-            model.fit(binned, **fit_kw)
-            pred = model.predict()
-
-            # Save learning curve
-            loss_hists[i, f, :(itr+1)] = model.loss_hist
-
-            # Save loss on intersection of training neurons and trials.
-            train_pred = pred[train_trials][:, :, train_neurons]
-            train_data = binned[train_trials][:, :, train_neurons]
-            resid = train_pred - train_data
-            num = np.linalg.norm(resid, axis=(0, 1))
-            denom = np.linalg.norm(train_data, axis=(0, 1)) + EPS
-            train_loss[i, f, train_neurons] = num / denom
-
-            # Save loss on test set.
-            test_pred = pred[test_trials][:, :, test_neurons]
-            test_data = binned[test_trials][:, :, test_neurons]
-            resid = test_pred - test_data
-            num = np.linalg.norm(resid, axis=(0, 1))
-            denom = np.linalg.norm(test_data, axis=(0, 1)) + EPS
-            test_loss[i, test_neurons] = num / denom
-
-        # Save results
-        results = {
-            'train_loss': np.nanmean(train_loss[:(i+1)], axis=1),
-            'test_loss': test_loss[:(i+1)],
-            'knots': knots[:(i+1)],
-            'smoothness': smoothness[:(i+1)],
-            'warp_reg': warp_reg[:(i+1)],
-            'iterations': iterations[:(i+1)],
-            'warp_iterations': warp_iterations[:(i+1)],
-            'loss_hists': loss_hists[:(i+1)],
+        # Create model instance.
+        model_kw = {
+            "smoothness_reg_scale": smoothness[i, j],
+            "warp_reg_scale": warp_reg[i, j]
         }
-        if outfile is not None:
-            dd.io.save(outfile, results)
+        if knots[i] == -1:
+            model = ShiftWarping(**model_kw)
+        else:
+            model = PiecewiseWarping(n_knots=knots[i], **model_kw)
+
+        # Fit model.
+        fit_kw = {
+            "verbose": False,
+            "iterations": iterations[i, j],
+            "warp_iterations": warp_iterations[i, j],
+            "neuron_idx": train_units,
+            "trial_idx": train_trials,
+        }
+        model.fit(binned, **fit_kw)
+
+        loss_hists[i, j, :(iterations[i, j] + 1)] = model.loss_hist
+
+        # Record loss on training set.
+        pred = model.predict()
+        train_loss[i, j] = _loss(pred, binned, train_trials, train_units)
+        valid_loss[i, j] = _loss(pred, binned, val_trials, val_units)
+
+        # Save loss on test set if validation loss is optimal
+        if np.argmin(valid_loss[i] == j):
+            test_loss[i] = _loss(pred, binned, test_trials, test_units)
+
+        # Save results.
+        if j == n_valid_samples - 1:
+            results = {
+                "knots": knots[:(i+1)],
+                "smoothness": smoothness[:(i+1)],
+                "warp_reg": warp_reg[:(i+1)],
+                "iterations": iterations[:(i+1)],
+                "warp_iterations": warp_iterations[:(i+1)],
+                "train_loss": train_loss[:(i+1)],
+                "valid_loss": valid_loss[:(i+1)],
+                "test_loss": test_loss[:(i+1)],
+                "loss_hists": loss_hists[:(i+1)],
+            }
+            if outfile is not None:
+                np.savez(outfile, **results)
+
+        # Update progress bar.
+        progress_bar.update(1)
 
     return results
 

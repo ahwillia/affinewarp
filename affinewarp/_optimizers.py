@@ -532,7 +532,8 @@ def nowarp_template(X, smoothness_scale, l2_scale, loss='quadratic'):
     """
     K, T, N = X.shape
     if loss == 'quadratic':
-        A = _diff_gramian(T, smoothness_reg_scale * K, l2_reg_scale * K)
+        A = _diff_gramian(T, smoothness_scale * K, l2_scale * K)
+        A[-1] += K
         B = np.sum(X, axis=0)
         return sci.linalg.solveh_banded(A, B)
     else:
