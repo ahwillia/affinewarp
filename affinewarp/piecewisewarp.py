@@ -58,8 +58,8 @@ class PiecewiseWarping(object):
         """
 
         # check inputs
-        if n_knots < 0 or not isinstance(n_knots, numbers.Integral):
-            raise ValueError('Number of knots must be nonnegative integer.')
+        if n_knots < -1 or not isinstance(n_knots, numbers.Integral):
+            raise ValueError('Number of knots must be an integer >= -1.')
 
         # model options
         self.n_knots = n_knots
@@ -77,34 +77,6 @@ class PiecewiseWarping(object):
         self._template_optimizer = funcs[0]
         self._warp_optimizer = funcs[1]
         self._eval_loss = funcs[2]
-
-    def _mutate_knots(self, temperature):
-        """
-        Produces a new candidate set of warping functions (as parameterized by
-        x and y coordinates of the knots) by randomly perturbing the current
-        model parameters.
-
-        Parameters
-        ----------
-        temperature : scalar
-            Scale of perturbation to the knots.
-
-        Returns
-        -------
-        x, y : ndarray
-            Coordinates of new candidate knots defining warping functions.
-        """
-        K = len(self.x_knots)
-
-        x = self.x_knots + (np.random.randn(K, self.n_knots+2) * temperature)
-        x.sort(axis=1)
-        x = x - x[:, (0,)]
-        x = x / x[:, (-1,)]
-
-        y = self.y_knots + (np.random.randn(K, self.n_knots+2) * temperature)
-        y.sort(axis=1)
-
-        return x, y
 
     def initialize_warps(self, n_trials, init_warps=None):
         """
@@ -124,7 +96,7 @@ class PiecewiseWarping(object):
         if init_warps is None:
             # Initialize warps to identity.
             self.x_knots = np.tile(
-                np.linspace(0, 1, self.n_knots+2),
+                np.linspace(0, 1, max(2, self.n_knots + 2)),
                 (n_trials, 1)
             )
             self.y_knots = self.x_knots.copy()
@@ -214,12 +186,13 @@ class PiecewiseWarping(object):
         neuron_idx : indices
             Specifies subset of neurons to fit warps on.
         """
-        storage = np.empty((data.shape[0], 4, self.n_knots + 2))
+        storage = np.empty((data.shape[0], 4, max(2, self.n_knots + 2)))
+        is_shift_only = self.n_knots < 0
         self._warp_optimizer(
             self.x_knots, self.y_knots, self.template[:, neuron_idx],
             data[:, :, neuron_idx], self.warp_reg_scale, self._losses,
             self._penalties, warp_iterations, self.n_restarts,
-            self.min_temp, self.max_temp, storage)
+            self.min_temp, self.max_temp, storage, is_shift_only)
 
     def _fit_template(self, data, trial_idx=slice(None)):
         """Fit warping template.

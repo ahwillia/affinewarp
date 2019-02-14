@@ -2,6 +2,7 @@
 
 import itertools
 import numpy as np
+import numpy.random as npr
 from tqdm import tqdm, trange
 from copy import deepcopy
 from .spikedata import SpikeData
@@ -13,21 +14,66 @@ from ._optimizers import nowarp_template
 EPS = np.finfo(float).eps
 
 
-def baseline_performance(
-        binned, n_samples, smoothness_range=(1e-2, 1e2), n_folds=5):
+def _crossval_partition(N, train_folds, valid_folds, test_folds):
     """
-    Computes testing and training error over a range of template
-    smoothness regularization scales, assuming no warping is done.
+    Computes a randomized train-validation-test partition of N indices.
+    """
+    num_folds = train_folds + valid_folds + test_folds
+    splits = np.array_split(npr.permutation(N), num_folds)
+    splits = [splits[i] for i in npr.permutation(num_folds)]
+    trainset = np.concatenate(splits[:train_folds])
+    validset = np.concatenate(splits[train_folds:(train_folds + valid_folds)])
+    testset = np.concatenate(splits[(train_folds + valid_folds):])
+    return trainset, validset, testset
+
+
+def _sample_log_uniform(rng, size):
+    """
+    Samples from a log-uniform distribution.
+    """
+    return 10 ** np.random.uniform(*np.log10(rng), size=size)
+
+
+def _crossval_loss(pred, targ, kk, nn):
+    """
+    Computes norm of residuals relative to norm of data, for a subset of
+    trials (indexed by kk) and units (indexed by nn).
+    """
+    resid = pred[kk][:, :, nn] - targ[kk][:, :, nn]
+    num = np.linalg.norm(resid)
+    denom = np.linalg.norm(targ[kk][:, :, nn]) + EPS
+    return num / denom
+
+
+def baseline_performance(
+        binned, n_samples, n_valid_samples, n_train_folds=3,
+        n_valid_folds=1, n_test_folds=1, smoothness_range=(1e-2, 1e2)):
+    """
+    Performs randomized nested cross-validation over a range of
+    template smoothness regularization scales, assuming no warping
+    is done.
 
     Parameters
     ----------
     binned : ndarray
         trials x timepoints x neurons binned spikes
-    n_samples : int
-        Number of smoothness regularization strengths, log uniformly
-        distributed.
-    n_folds : int
-        Number of folds used for cross-validation.
+    samples_per_knot : int
+        Number of cross-validation runs per knot.
+    n_valid_samples : int
+        Number of inner samples to optimize smoothness and warp
+        complexity regularization parameters on validation set.
+    n_train_folds : int
+        Number of folds used for training.
+    n_valid_folds : int
+        Number of folds used for validation.
+    n_test_folds : int
+        Number of folds used for testing.
+    smoothness_range : tuple of floats
+        Specifies [minimum, maximum) strength of regularization on
+        template smoothness; larger values penalize roughness over time
+        more stringently. The regularization strength for each model
+        is randomly sampled from a log-uniform distribution over this
+        interval.
 
     Returns
     -------
@@ -49,62 +95,69 @@ def baseline_performance(
     Only implemented for quadratic loss.
     """
 
+    # Data dimensions.
+    K, T, N = binned.shape
+
     # Use default L2 regularization for PiecewiseWarping.
     l2_scale = 1e-7
 
     # Grid search over logarithmic scale.
-    smoothness = np.logspace(*np.log10(smoothness_range), n_samples)
+    smoothness = _sample_log_uniform(
+        smoothness_range, size=(n_samples, n_valid_samples))
 
-    # Allocate space for results.
-    train_loss = np.zeros((n_samples, n_folds))
-    test_loss = np.zeros((n_samples, n_folds))
+    # Initialize arrays to store losses.
+    train_loss = np.empty((n_samples, n_valid_samples))
+    valid_loss = np.full((n_samples, n_valid_samples), np.inf)
+    test_loss = np.empty(n_samples)
 
-    # Fit models.
-    for i, s in zip(trange(n_samples), smoothness):
+    progress_bar = tqdm(total=n_samples * n_valid_samples)
 
-        # Shuffle neuron order for train and test sets.
-        trial_indices = np.random.permutation(binned.shape[0])
+    for i, j in itertools.product(range(n_samples), range(n_valid_samples)):
 
-        # Form data partitions.
-        splits = np.array_split(trial_indices, n_folds)
+        # Update train - validation - test sets.
+        if j == 0:
+            train_trials, val_trials, test_trials = _crossval_partition(
+                binned.shape[0], n_train_folds, n_valid_folds, n_test_folds)
 
-        for f, test_trials in enumerate(splits):
+        # Fit template and form prediction.
+        s = smoothness[i, j]
+        template = nowarp_template(binned[train_trials], s, l2_scale)
+        pred = np.tile(template[None, :, :], (K, 1, 1))
 
-            # Determine trials for training.
-            test_data = binned[test_trials]
-            train_data = binned[np.setdiff1d(trial_indices, test_trials)]
+        # Record loss on training set.
+        train_loss[i, j] = _crossval_loss(
+                pred, binned, train_trials, slice(None))
+        valid_loss[i, j] = _crossval_loss(
+            pred, binned, val_trials, slice(None))
 
-            # Fit template.
-            template = nowarp_template(train_data, s, l2_scale)
+        # Save loss on test set if validation loss is optimal
+        if np.argmin(valid_loss[i]) == j:
+            test_loss[i] = _crossval_loss(
+                pred, binned, test_trials, slice(None))
 
-            # Compute and save loss on training set.
-            num = np.linalg.norm(template - train_data)
-            denom = np.linalg.norm(train_data) + EPS
-            train_loss[i, f] = num / denom
-
-            # Compute and save loss on testing set.
-            num = np.linalg.norm(template - test_data)
-            denom = np.linalg.norm(test_data) + EPS
-            test_loss[i, f] = num / denom
+        # Update progress bar.
+        progress_bar.update(1)
 
     return {
         "smoothness": smoothness,
         "train_loss": train_loss,
+        "valid_loss": valid_loss,
         "test_loss": test_loss,
     }
 
 
 def paramsearch(
-        binned, samples_per_knot, n_valid_samples, n_train_folds=3, n_valid_folds=1,
-        n_test_folds=1, knot_range=(-1, 2), smoothness_range=(1e-2, 1e2),
-        warpreg_range=(1e-2, 1e1), iter_range=(50, 300),
-        warp_iter_range=(50, 300), outfile=None):
+        binned, samples_per_knot, n_valid_samples, n_train_folds=3,
+        n_valid_folds=1, n_test_folds=1, knot_range=(-1, 2),
+        smoothness_range=(1e-2, 1e2), warpreg_range=(1e-2, 1e1),
+        iter_range=(50, 300), warp_iter_range=(50, 300), outfile=None):
     """
-    Performs randomized search over hyperparameters on warping
-    functions. For each set of randomly sampled parameters, neurons
-    are randomly split `n_folds` times into train/test groups. An
-    R-squared metric of across-trial reliability is measured on each
-    test set; larger scores indicate warping functions that generalize
+    Performs nested cross-validation over shift-only, linear, and
+    piecewise linear warping models, in order to tune all hyperparmeters
+    and compare performance. For each set of randomly sampled parameters,
+    trials and units are randomly split `n_folds` times into train/test
+    groups. An R-squared metric of across-trial reliability is measured
+    on each test set; larger scores indicate warping functions that generalize
     better.
 
     Parameters
@@ -194,26 +247,6 @@ def paramsearch(
     # Dataset dimensions (trials x timepoints x units).
     K, T, N = binned.shape
 
-    # Samples from a log uniform distribution.
-    def lg_unif(rng, size):
-        return 10 ** np.random.uniform(*np.log10(rng), size=size)
-
-    # Draws random partition of indices.
-    def partition(indices, n_folds_1, n_folds_2):
-        ind = indices.copy()
-        np.random.shuffle(ind)
-        splits = np.array_split(ind, n_folds_1 + n_folds_2)
-        p1 = np.concatenate(splits[:n_folds_1])
-        p2 = np.concatenate(splits[n_folds_1:])
-        return p1, p2
-
-    # Compute loss on a subset of trials and units
-    def _loss(pred, targ, kk, nn):
-        resid = pred[kk][:, :, nn] - targ[kk][:, :, nn]
-        num = np.linalg.norm(resid)
-        denom = np.linalg.norm(targ[kk][:, :, nn]) + EPS
-        return num / denom
-
     # Randomly draw all parameter settings for each model.
     knots = np.tile(np.arange(*knot_range), samples_per_knot)
     n_samples = len(knots)
@@ -240,15 +273,10 @@ def paramsearch(
 
         # Update train - validation - test sets.
         if j == 0:
-            train_val_units, test_units = partition(
-                np.arange(N), n_train_folds + n_valid_folds, n_test_folds)
-            train_val_trials, test_trials = partition(
-                np.arange(K), n_train_folds + n_valid_folds, n_test_folds)
-
-            train_units, val_units = partition(
-                train_val_units, n_train_folds, n_valid_folds)
-            train_trials, val_trials = partition(
-                train_val_trials, n_train_folds, n_valid_folds)
+            train_units, val_units, test_units = _crossval_partition(
+                N, n_train_folds, n_valid_folds, n_test_folds)
+            train_trials, val_trials, test_trials = _crossval_partition(
+                K, n_train_folds, n_valid_folds, n_test_folds)
 
         # Create model instance.
         model_kw = {
@@ -274,12 +302,15 @@ def paramsearch(
 
         # Record loss on training set.
         pred = model.predict()
-        train_loss[i, j] = _loss(pred, binned, train_trials, train_units)
-        valid_loss[i, j] = _loss(pred, binned, val_trials, val_units)
+        train_loss[i, j] = _crossval_loss(
+                pred, binned, train_trials, train_units)
+        valid_loss[i, j] = _crossval_loss(
+            pred, binned, val_trials, val_units)
 
         # Save loss on test set if validation loss is optimal
         if np.argmin(valid_loss[i]) == j:
-            test_loss[i] = _loss(pred, binned, test_trials, test_units)
+            test_loss[i] = _crossval_loss(
+                pred, binned, test_trials, test_units)
 
         # Save results.
         if j == n_valid_samples - 1:
