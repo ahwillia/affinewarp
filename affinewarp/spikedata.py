@@ -145,11 +145,14 @@ class SpikeData(object):
             raise ValueError("Expected 'n_bins' to be a positive integer, but "
                              "saw {}".format(n_bins))
 
-        # Compute bin for each spike.
-        bin_ids = (self.fractional_spiketimes * (n_bins - 1e-9))
+        # Compute bin for each spike. It is important not to cast to integer
+        # indices because fractional_spiketimes contains negative entries
+        # and negative decimals round upwards. Thus, we keep bin_ids as floats
+        # and handle the negative indices in _fast_bin.
+        _eps = 1e-9
+        bin_ids = _eps + (self.fractional_spiketimes * (n_bins - 2*_eps))
 
-        # Allocate space for result. Ignore any spiketimes outside of the
-        # interval [tmin, tmax].
+        # Allocate space for result.
         shape = (self.n_trials, n_bins, self.n_neurons)
         binned = np.zeros(shape, dtype=float)
 
@@ -243,7 +246,7 @@ class SpikeData(object):
         arr_map[neuron_ids] = np.arange(len(neuron_ids))
         result = self if inplace else self.copy()
         _reindex(result.neurons, arr_map)
-        result.n_neurons = len(neuron_ids) - 1
+        result.n_neurons = len(neuron_ids)
         return result
 
     def reorder_neurons(self, neuron_indices, inplace=False):
@@ -382,7 +385,9 @@ def _fast_bin(counts, trials, bins, neurons):
     spikes that are outside of tmin and tmax.
     """
     for i, j, k in zip(trials, bins, neurons):
-        if j >= 0 and j < counts.shape[1]:
+        if (j < 0) or (int(j) >= counts.shape[1]):
+            pass
+        else:
             counts[i, int(j), k] += 1
 
 

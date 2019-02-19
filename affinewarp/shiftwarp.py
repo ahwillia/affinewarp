@@ -106,8 +106,8 @@ class ShiftWarping(object):
 
         # Warps are penalized based on distance from identity. These penalties
         # can be pre-computed up front.
-        self._warp_penalty = self.warp_reg_scale * \
-            np.abs(np.linspace(-L / T, L / T, 2 * L + 1)[None, :])
+        self._warp_penalty = self.warp_reg_scale * T * N * \
+            np.abs(np.linspace(-self.maxlag, self.maxlag, 2 * L + 1)[None, :])
 
         # Initialize shifts and model template.
         self.shifts = np.zeros(K, dtype=int)
