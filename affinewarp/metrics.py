@@ -10,7 +10,7 @@ from numba import jit
 
 def mse(data, nbins=None):
     """
-    Root-Mean-Squared-Error of trial-average for each neuron.
+    Mean-Squared-Error of trial-average for each neuron.
     """
     binned = data.bin_spikes(nbins) if isinstance(data, SpikeData) else data
     resid = binned - binned.mean(axis=0, keepdims=True)

@@ -9,19 +9,19 @@ from affinewarp import PiecewiseWarping, SpikeData
 from numpy.testing import assert_allclose, assert_array_equal
 
 
-def test_monotonic_knots():
-    """
-    Test that warping functions remain monotonically increasing during random
-    search.
-    """
-    model = PiecewiseWarping()
-    data = np.random.randn(100, 101, 102)
-    model.fit(data, iterations=1, verbose=False)
+# def test_monotonic_knots():
+#     """
+#     Test that warping functions remain monotonically increasing during random
+#     search.
+#     """
+#     model = PiecewiseWarping()
+#     data = np.random.randn(100, 101, 102)
+#     model.fit(data, iterations=1, verbose=False)
 
-    for temperature in np.logspace(-3, 3, 100):
-        x, y = model._mutate_knots(temperature)
-        assert np.all(np.diff(x, axis=1) >= 0)
-        assert np.all(np.diff(y, axis=1) >= 0)
+#     for temperature in np.logspace(-3, 3, 100):
+#         x, y = model._mutate_knots(temperature)
+#         assert np.all(np.diff(x, axis=1) >= 0)
+#         assert np.all(np.diff(y, axis=1) >= 0)
 
 
 def test_warp_penalties():
