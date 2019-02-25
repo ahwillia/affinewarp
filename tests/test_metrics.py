@@ -7,14 +7,14 @@ import numpy as np
 from affinewarp.metrics import warp_distances
 from affinewarp._optimizers import warp_penalties
 from affinewarp import PiecewiseWarping, ShiftWarping
+from affinewarp.datasets import piecewise_warped_data
 from copy import deepcopy
 from numpy.testing import assert_allclose
 
 
 def _rand_model(n_knots, n_trials):
-    model = PiecewiseWarping(n_knots=n_knots)
-    model.initialize_warps(n_trials)
-    model.x_knots, model.y_knots = model._mutate_knots(1e-2)
+    _, model = piecewise_warped_data(
+        n_knots=n_knots, n_trials=n_trials, knot_mutation_scale=1e-2)
     return model
 
 
