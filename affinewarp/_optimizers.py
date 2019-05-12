@@ -78,13 +78,15 @@ def _construct_template_optimizer(loss):
                                    x_knots=x_knots, y_knots=y_knots)
 
             opt = scipy.optimize.minimize(obj, template.ravel(),
-                                          jac=True, method='L-BFGS-B')
+                                          jac=True, method='L-BFGS-B',
+                                          options=dict(maxiter=20))
 
             # # Fit using Newton's method
             # opt = scipy.optimize.minimize(obj, template.ravel(),
             #                               jac=True, hessp=obj.hessp,
-            #                               method='newton-cg')
-            print(opt.message)
+            #                               method='newton-cg',
+            #                               options=dict(maxiter=10))
+            # print(opt.message)
 
             return (opt.x).reshape(template.shape)
 
@@ -395,28 +397,28 @@ def warp_to_sparse_matrix(X, Y, rows, cols, vals):
 
         # clip warp interpolation between zero and one
         if z <= 0:
-            rows[t, 0] = t
-            rows[t, 1] = t
-            cols[t, 0] = 0
-            cols[t, 1] = 1
+            cols[t, 0] = t
+            cols[t, 1] = t
+            rows[t, 0] = 0
+            rows[t, 1] = 1
             vals[t, 0] = 1.0
             vals[t, 1] = 0.0
 
         elif z >= 1:
-            rows[t, 0] = t
-            rows[t, 1] = t
-            cols[t, 0] = T - 2
-            cols[t, 1] = T - 1
+            cols[t, 0] = t
+            cols[t, 1] = t
+            rows[t, 0] = T - 2
+            rows[t, 1] = T - 1
             vals[t, 0] = 0.0
             vals[t, 1] = 1.0
 
         # do linear interpolation
         else:
             zf = z * (T - 1)
-            rows[t, 0] = t
-            rows[t, 1] = t
-            cols[t, 0] = int(zf)
-            cols[t, 1] = int(zf) + 1
+            cols[t, 0] = t
+            cols[t, 1] = t
+            rows[t, 0] = int(zf)
+            rows[t, 1] = int(zf) + 1
             vals[t, 0] = 1 - (zf % 1)
             vals[t, 1] = zf % 1
 
