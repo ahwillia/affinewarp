@@ -363,8 +363,9 @@ class SpikeData(object):
 
     def copy(self):
         result = type(self)(self.trials.copy(), self.spiketimes.copy(),
-                            self.neurons.copy(), self.tmin, self.tmax,
-                            n_trials=self.n_trials, n_neurons=self.n_neurons)
+                            self.neurons.copy(), self.tmin, self.tmax)
+        result.n_trials = self.n_trials
+        result.n_neurons = self.n_neurons
         return result
 
     def __getitem__(self, key):
