@@ -8,13 +8,27 @@ from sklearn.utils.validation import check_is_fitted
 from numba import jit
 
 
+def mse(data, nbins=None):
+    """
+    Mean-Squared-Error of trial-average for each neuron.
+    """
+    binned = data.bin_spikes(nbins) if isinstance(data, SpikeData) else data
+    resid = binned - binned.mean(axis=0, keepdims=True)
+    return np.mean(resid ** 2, axis=(0, 1))
+
+
 def rmse(data, nbins=None):
     """
     Root-Mean-Squared-Error of trial-average for each neuron.
     """
-    binned = data.bin_spikes(nbins) if isinstance(data, SpikeData) else data
-    resid = binned - binned.mean(axis=0, keepdims=True)
-    return np.sqrt(np.mean(resid ** 2, axis=(0, 1)))
+    return np.sqrt(mse(data, nbins=nbins))
+
+
+def neg_mse(data, nbins=None):
+    """
+    Negative Mean-Squared-Error of trial-average for each neuron.
+    """
+    return -mse(data, nbins=nbins)
 
 
 def r_squared(data, nbins=None):

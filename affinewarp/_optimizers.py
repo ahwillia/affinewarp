@@ -160,7 +160,7 @@ def _construct_warp_optimizer(loss):
     def fit_one_warp(x_knots, y_knots, template, data, warp_reg_scale,
                      iterations, n_restarts, min_temp, max_temp,
                      initial_loss, initial_penalty,
-                     curr_x, curr_y, next_x, next_y):
+                     curr_x, curr_y, next_x, next_y, is_shift_only):
 
         # Problem dimensions.
         n_knots = len(x_knots)
@@ -212,6 +212,12 @@ def _construct_warp_optimizer(loss):
                 next_x = next_x - next_x[0]
                 next_x = next_x / next_x[-1]
 
+                # If desired, constrain to unit slope.
+                if is_shift_only:
+                    _m = (next_y[0] + next_y[1]) / 2
+                    next_y[0] = _m - .5
+                    next_y[1] = _m + .5
+
                 # Compute objective on new knots.
                 next_penalty = \
                     warp_penalty_one_trial(next_x, next_y) * warp_reg_scale
@@ -245,7 +251,7 @@ def _construct_warp_optimizer(loss):
     @numba.jit(nopython=True, parallel=True)
     def fit_all_warps(x_knots, y_knots, template, data, warp_reg_scale,
                       losses, penalties, iterations, n_restarts,
-                      min_temp, max_temp, storage):
+                      min_temp, max_temp, storage, is_shift_only):
 
         for k in numba.prange(x_knots.shape[0]):
             new_loss, new_pen = fit_one_warp(
@@ -255,7 +261,8 @@ def _construct_warp_optimizer(loss):
                 n_restarts, min_temp, max_temp,  # more params
                 losses[k], penalties[k],
                 storage[k, 0], storage[k, 1],
-                storage[k, 2], storage[k, 3]
+                storage[k, 2], storage[k, 3],
+                is_shift_only
             )
             losses[k] = new_loss
             penalties[k] = new_pen
@@ -359,7 +366,7 @@ def warp_penalties(X, Y, storage):
     return storage
 
 
-# @numba.jit(nopython=True)
+@numba.jit(nopython=True)
 def warp_to_sparse_matrix(X, Y, rows, cols, vals):
 
     # initialize line segement for interpolation
@@ -524,6 +531,20 @@ class PoissonObjective:
         # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 
         return self.hess_out.ravel()
+
+
+def nowarp_template(X, smoothness_scale, l2_scale, loss='quadratic'):
+    """
+    Solves for the optimal template assuming no warping.
+    """
+    K, T, N = X.shape
+    if loss == 'quadratic':
+        A = _diff_gramian(T, smoothness_scale * K, l2_scale * K)
+        A[-1] += K
+        B = np.sum(X, axis=0)
+        return sci.linalg.solveh_banded(A, B)
+    else:
+        raise NotImplementedError
 
 
 def _diff_gramian(T, smoothness_scale, l2_scale):

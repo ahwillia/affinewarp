@@ -29,10 +29,11 @@ Then navigate to the downloaded folder:
 cd /path/to/affinewarp
 ```
 
-And install the package:
+Install the package and requirements:
 
 ```
 pip install .
+pip install -r requirements.txt
 ```
 
 You will need to repeat these steps if we update the code.

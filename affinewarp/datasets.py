@@ -58,7 +58,21 @@ def piecewise_warped_data(
 
     # Initialize warping knots.
     model.initialize_warps(n_trials)
-    model.x_knots, model.y_knots = model._mutate_knots(knot_mutation_scale)
+
+    # Mutate warping knots.
+    x_noise = np.random.randn(n_trials, n_knots + 2) * knot_mutation_scale
+    x = model.x_knots + x_noise
+    x.sort(axis=1)
+    x = x - x[:, (0,)]
+    x = x / x[:, (-1,)]
+
+    y_noise = np.random.randn(n_trials, n_knots + 2) * knot_mutation_scale
+    y = model.y_knots + y_noise
+    y.sort(axis=1)
+
+    model.x_knots, model.y_knots = x, y
+
+    # If desired, clip y_knots.
     if clip_y_knots:
         model.y_knots[:, 0] = 0.
         model.y_knots[:, -1] = 1.
