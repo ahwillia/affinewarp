@@ -9,9 +9,9 @@ from scipy.ndimage import gaussian_filter1d
 
 def piecewise_warped_data(
         n_trials=120, n_timepoints=100, n_neurons=50, n_knots=1,
-        knot_mutation_scale=0.1, clip_y_knots=True, template_amplitude=3.0,
-        template_base=0.0, template_smoothness=5.0, noise_type="poisson",
-        noise_scale=0.1, seed=1234):
+        knot_mutation_scale=0.1, clip_y_knots=True, template_scale=3.0,
+        template_base=0.0, template_drop=0.5, template_smoothness=5.0,
+        noise_type="poisson", noise_scale=0.1, seed=None):
     """Generates data from the PiecewiseWarping model.
 
     Parameters
@@ -28,8 +28,10 @@ def piecewise_warped_data(
         Scale of noise added to warping function knots.
     clip_y_knots : bool
         If True, clip y coordinates on warping functions between zero and one.
-    template_amplitude : float
-        Max value (before smoothing) of ground-truth model template.
+    template_scale : float
+        Scale of exponentially distributed template values (before smoothing).
+    template_drop : float
+        Probability of zeroing template values (spike-and-slab distribution).
     template_base : float
         Min value of ground-truth model template.
     template_smoothness : float
@@ -60,13 +62,13 @@ def piecewise_warped_data(
     model.initialize_warps(n_trials)
 
     # Mutate warping knots.
-    x_noise = np.random.randn(n_trials, n_knots + 2) * knot_mutation_scale
+    x_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
     x = model.x_knots + x_noise
     x.sort(axis=1)
     x = x - x[:, (0,)]
     x = x / x[:, (-1,)]
 
-    y_noise = np.random.randn(n_trials, n_knots + 2) * knot_mutation_scale
+    y_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
     y = model.y_knots + y_noise
     y.sort(axis=1)
 
@@ -79,9 +81,12 @@ def piecewise_warped_data(
 
     # Initialize template.
     template_shape = n_timepoints, n_neurons
-    template = rs.uniform(
-        template_base, template_base + template_amplitude, size=template_shape)
+    template = template_base + \
+        rs.exponential(template_scale, size=template_shape) * \
+        rs.binomial(1, 1 - template_drop, size=template_shape)
     template = gaussian_filter1d(template, template_smoothness, axis=0)
+    template[0] *= 0.0
+    template[-1] *= 0.0
     model.template = template
 
     # Generate data

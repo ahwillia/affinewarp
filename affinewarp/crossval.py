@@ -251,13 +251,13 @@ def paramsearch(
     knots = np.tile(np.arange(*knot_range), samples_per_knot)
     n_samples = len(knots)
 
-    smoothness = lg_unif(
+    smoothness = _sample_log_uniform(
         smoothness_range, size=(n_samples, n_valid_samples))
-    warp_reg = lg_unif(
+    warp_reg = _sample_log_uniform(
         warpreg_range, size=(n_samples, n_valid_samples))
-    iterations = lg_unif(
+    iterations = _sample_log_uniform(
         iter_range, size=(n_samples, n_valid_samples)).astype('int')
-    warp_iterations = lg_unif(
+    warp_iterations = _sample_log_uniform(
         warp_iter_range, size=(n_samples, n_valid_samples)).astype('int')
 
     # Initialize arrays to store losses.
@@ -265,7 +265,7 @@ def paramsearch(
     valid_loss = np.full((n_samples, n_valid_samples), np.inf)
     test_loss = np.empty(n_samples)
     loss_hists = np.full(
-        (n_samples, n_valid_samples, iter_range[1] + 1), np.nan)
+        (n_samples, n_valid_samples, iter_range[1]), np.nan)
 
     progress_bar = tqdm(total=n_samples * n_valid_samples)
 
