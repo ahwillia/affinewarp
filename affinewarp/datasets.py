@@ -62,13 +62,13 @@ def piecewise_warped_data(
     model.initialize_warps(n_trials)
 
     # Mutate warping knots.
-    x_noise = np.random.randn(n_trials, n_knots + 2) * knot_mutation_scale
+    x_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
     x = model.x_knots + x_noise
     x.sort(axis=1)
     x = x - x[:, (0,)]
     x = x / x[:, (-1,)]
 
-    y_noise = np.random.randn(n_trials, n_knots + 2) * knot_mutation_scale
+    y_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
     y = model.y_knots + y_noise
     y.sort(axis=1)
 
@@ -85,6 +85,8 @@ def piecewise_warped_data(
         rs.exponential(template_scale, size=template_shape) * \
         rs.binomial(1, 1 - template_drop, size=template_shape)
     template = gaussian_filter1d(template, template_smoothness, axis=0)
+    template[0] *= 0.0
+    template[-1] *= 0.0
     model.template = template
 
     # Generate data
