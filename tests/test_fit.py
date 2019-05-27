@@ -29,6 +29,7 @@ def test_identity_warps_gauss_errors():
     )
 
     # Fit model template without updating warps.
-    model.fit(data, iterations=1, warp_iterations=-1)
+    model.initialize_warps(n_trials)
+    model._fit_template(data, np.arange(n_trials))
 
     assert_allclose(model.template, data.mean(axis=0), rtol=1e-4)

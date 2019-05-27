@@ -62,15 +62,25 @@ def piecewise_warped_data(
     model.initialize_warps(n_trials)
 
     # Mutate warping knots.
-    x_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
-    x = model.x_knots + x_noise
-    x.sort(axis=1)
-    x = x - x[:, (0,)]
-    x = x / x[:, (-1,)]
+    if n_knots < 0:
+        # Shift-only warping.
+        xy_noise = rs.rand(n_trials, 1)
+        xy_noise *= 2 * knot_mutation_scale
+        xy_noise -= knot_mutation_scale
+        x = np.column_stack((np.zeros(n_trials), np.ones(n_trials)))
+        y = x + xy_noise
 
-    y_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
-    y = model.y_knots + y_noise
-    y.sort(axis=1)
+    else:
+        # Linear or piecewise linear warping.
+        x_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
+        x = model.x_knots + x_noise
+        x.sort(axis=1)
+        x = x - x[:, (0,)]
+        x = x / x[:, (-1,)]
+
+        y_noise = rs.randn(n_trials, n_knots + 2) * knot_mutation_scale
+        y = model.y_knots + y_noise
+        y.sort(axis=1)
 
     model.x_knots, model.y_knots = x, y
 

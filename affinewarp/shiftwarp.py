@@ -9,6 +9,8 @@ from .spikedata import SpikeData
 from .utils import check_dimensions
 from ._optimizers import _diff_gramian, PoissonObjective
 
+from .bmat import nnls_solveh_banded
+
 
 class ShiftWarping(object):
     """
@@ -26,7 +28,8 @@ class ShiftWarping(object):
     """
 
     def __init__(self, maxlag=.5, warp_reg_scale=0, smoothness_reg_scale=0,
-                 l2_reg_scale=1e-7, loss='quadratic'):
+                 l2_reg_scale=1e-7, loss='quadratic', center_shifts=False,
+                 nonneg=False):
         """Initializes ShiftWarping object with hyperparameters.
 
         Parameters
@@ -42,6 +45,11 @@ class ShiftWarping(object):
             Penalty strength on L2 norm of the warping template.
         loss : str
             Specifies loss function, either 'quadratic' or 'poisson'
+        center_shifts : bool
+            If True, shifts are mean-centered on each iteration. Defaults
+            to False.
+        nonneg : bool
+            If True, forces template to be nonnegative. Defaults to False.
         """
 
         if (maxlag < 0) or (maxlag > .5):
@@ -53,6 +61,8 @@ class ShiftWarping(object):
         self.smoothness_reg_scale = smoothness_reg_scale
         self.l2_reg_scale = l2_reg_scale
         self.loss = loss
+        self.center_shifts = center_shifts
+        self.nonneg = nonneg
 
         if loss == 'quadratic':
             self._shifted_loss = _compute_shifted_quad_loss
@@ -111,6 +121,7 @@ class ShiftWarping(object):
 
         # Initialize shifts and model template.
         self.shifts = np.zeros(K, dtype=int)
+        self.template = None
         self._fit_template(data)
 
         # Initialize loss history
@@ -156,6 +167,10 @@ class ShiftWarping(object):
         obj = losses + self._warp_penalty
         self.shifts = np.argmin(obj, axis=1) - L
 
+        if self.center_shifts:
+            self.shifts = \
+                self.shifts - round(float(np.mean(self.shifts)))
+
     def _fit_template(self, data):
         """Updates template firing rates."""
 
@@ -168,7 +183,10 @@ class ShiftWarping(object):
             WtX = np.zeros((T, N))
             _fill_WtW(self.shifts, WtW[-1])
             _fill_WtX(data, self.shifts, WtX)
-            self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
+            if self.nonneg:
+                self.template = nnls_solveh_banded((WtW + DtD), WtX, self.template)
+            else:
+                self.template = sci.linalg.solveh_banded((WtW + DtD), WtX)
 
         elif self.loss == 'poisson':
             # Get initial parameters.
