@@ -233,7 +233,7 @@ class ShiftWarping(object):
         _predict(self.template, self.shifts, pred)
         return pred
 
-    def transform(self, data, zero_pad=False):
+    def transform(self, data, padval=np.nan):
         """
         Applies inverse warping functions to align raw data across trials.
         """
@@ -248,7 +248,7 @@ class ShiftWarping(object):
         else:
             # warp dense data
             out = np.empty_like(data)
-            _warp_data(data, self.shifts, out, zero_pad)
+            _warp_data(data, self.shifts, out, padval)
             return out
 
     def event_transform(self, trials, frac_times):
@@ -358,13 +358,13 @@ def _fill_WtX(data, shifts, out):
 
 
 @numba.jit(nopython=True)
-def _warp_data(data, shifts, out, zero_pad):
+def _warp_data(data, shifts, out, padval):
     K, T, N = data.shape
     for k in range(K):
         i = shifts[k]
         t = 0
         while i < 0:
-            out[k, t] = 0 if zero_pad else data[k, 0]
+            out[k, t] = 0 if padval else data[k, 0]
             t += 1
             i += 1
         while (i < T) and (t < T):
@@ -372,7 +372,7 @@ def _warp_data(data, shifts, out, zero_pad):
             t += 1
             i += 1
         while t < T:
-            out[k, t] = 0 if zero_pad else data[k, -1]
+            out[k, t] = 0 if padval else data[k, -1]
             t += 1
 
 
