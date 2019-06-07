@@ -248,7 +248,7 @@ class ShiftWarping(object):
         else:
             # warp dense data
             out = np.empty_like(data)
-            _warp_data(data, self.shifts, out, padval)
+            _warp_data(data, self.shifts, out)
             return out
 
     def event_transform(self, trials, frac_times):
