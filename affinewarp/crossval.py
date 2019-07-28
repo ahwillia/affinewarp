@@ -36,114 +36,11 @@ def _sample_log_uniform(rng, size):
 
 def _crossval_loss(pred, targ, kk, nn):
     """
-    Computes norm of residuals relative to norm of data, for a subset of
+    Computes sum of squared residuals on a subset of
     trials (indexed by kk) and units (indexed by nn).
     """
-    resid = pred[kk][:, :, nn] - targ[kk][:, :, nn]
-    num = np.linalg.norm(resid)
-    denom = np.linalg.norm(targ[kk][:, :, nn]) + EPS
-    return num / denom
-
-
-def baseline_performance(
-        binned, n_samples, n_valid_samples, n_train_folds=3,
-        n_valid_folds=1, n_test_folds=1, smoothness_range=(1e-2, 1e2)):
-    """
-    Performs randomized nested cross-validation over a range of
-    template smoothness regularization scales, assuming no warping
-    is done.
-
-    Parameters
-    ----------
-    binned : ndarray
-        trials x timepoints x neurons binned spikes
-    samples_per_knot : int
-        Number of cross-validation runs per knot.
-    n_valid_samples : int
-        Number of inner samples to optimize smoothness and warp
-        complexity regularization parameters on validation set.
-    n_train_folds : int
-        Number of folds used for training.
-    n_valid_folds : int
-        Number of folds used for validation.
-    n_test_folds : int
-        Number of folds used for testing.
-    smoothness_range : tuple of floats
-        Specifies [minimum, maximum) strength of regularization on
-        template smoothness; larger values penalize roughness over time
-        more stringently. The regularization strength for each model
-        is randomly sampled from a log-uniform distribution over this
-        interval.
-
-    Returns
-    -------
-    results : dict
-        Dictionary holding results:
-
-        "smoothness" : (n_samples, n_valid_samples) array holding sampled
-            regularization strengths on warping templates, penalizing
-            roughness.
-
-        "train_loss": (n_samples, n_valid_samples) array holding model loss
-            on the training set.
-
-        "test_loss": (n_samples,) array holding model loss on the test set.
-
-
-    Notes
-    -----
-    Only implemented for quadratic loss.
-    """
-
-    # Data dimensions.
-    K, T, N = binned.shape
-
-    # Use default L2 regularization for PiecewiseWarping.
-    l2_scale = 1e-7
-
-    # Grid search over logarithmic scale.
-    smoothness = _sample_log_uniform(
-        smoothness_range, size=(n_samples, n_valid_samples))
-
-    # Initialize arrays to store losses.
-    train_loss = np.empty((n_samples, n_valid_samples))
-    valid_loss = np.full((n_samples, n_valid_samples), np.inf)
-    test_loss = np.empty(n_samples)
-
-    progress_bar = tqdm(total=n_samples * n_valid_samples)
-
-    for i, j in itertools.product(range(n_samples), range(n_valid_samples)):
-
-        # Update train - validation - test sets.
-        if j == 0:
-            train_trials, val_trials, test_trials = _crossval_partition(
-                binned.shape[0], n_train_folds, n_valid_folds, n_test_folds)
-
-        # Fit template and form prediction.
-        s = smoothness[i, j]
-        template = nowarp_template(binned[train_trials], s, l2_scale)
-        pred = np.tile(template[None, :, :], (K, 1, 1))
-
-        # Record loss on training set.
-        train_loss[i, j] = _crossval_loss(
-                pred, binned, train_trials, slice(None))
-        valid_loss[i, j] = _crossval_loss(
-            pred, binned, val_trials, slice(None))
-
-        # Save loss on test set if validation loss is optimal
-        if np.argmin(valid_loss[i]) == j:
-            test_loss[i] = _crossval_loss(
-                pred, binned, test_trials, slice(None))
-
-        # Update progress bar.
-        progress_bar.update(1)
-
-    return {
-        "smoothness": smoothness,
-        "train_loss": train_loss,
-        "valid_loss": valid_loss,
-        "test_loss": test_loss,
-    }
+    resid = (pred[kk][:, :, nn] - targ[kk][:, :, nn])
+    return np.dot(resid.ravel(), resid.ravel())
 
 
 def paramsearch(
@@ -227,13 +124,14 @@ def paramsearch(
         "warp_iterations" : (n_samples, n_valid_samples) array holding number
             of inner iteration steps for fitting warping functions.
 
-        "train_loss": (n_samples, n_valid_samples) array holding model loss
-            on the training set.
+        "train_rsq": (n_samples, n_valid_samples) array holding model
+            performance on the training set.
 
-        "valid_loss": (n_samples, n_valid_samples) array holding model loss
-            on the validation set.
+        "valid_rsq": (n_samples, n_valid_samples) array holding model
+            performance on the validation set.
 
-        "test_loss": (n_samples,) array holding model loss on the test set.
+        "test_rsq": (n_samples,) array holding model performance on the
+            test set.
 
         "loss_hists" : (n_samples, n_valid_samples, n_iterations + 1) array
             holding the learning curves for all models. The loss is computed
@@ -261,9 +159,9 @@ def paramsearch(
         warp_iter_range, size=(n_samples, n_valid_samples)).astype('int')
 
     # Initialize arrays to store losses.
-    train_loss = np.empty((n_samples, n_valid_samples))
-    valid_loss = np.full((n_samples, n_valid_samples), np.inf)
-    test_loss = np.empty(n_samples)
+    train_rsq = np.empty((n_samples, n_valid_samples))
+    valid_rsq = np.full((n_samples, n_valid_samples), np.inf)
+    test_rsq = np.empty(n_samples)
     loss_hists = np.full(
         (n_samples, n_valid_samples, iter_range[1]), np.nan)
 
@@ -298,19 +196,34 @@ def paramsearch(
         }
         model.fit(binned, **fit_kw)
 
+        # Store optimization learning curve.
         loss_hists[i, j, :(iterations[i, j] + 1)] = model.loss_hist
+
+        # Create baseline model (simple trial average).
+        baseline_pred = np.tile(
+            np.mean(binned[train_trials], axis=0, keepdims=True),
+            (binned.shape[0], 1, 1)
+        )
 
         # Record loss on training set.
         pred = model.predict()
-        train_loss[i, j] = _crossval_loss(
-                pred, binned, train_trials, train_units)
-        valid_loss[i, j] = _crossval_loss(
-            pred, binned, val_trials, val_units)
+        train_rsq[i, j] = 1 - (
+            _crossval_loss(pred, binned, train_trials, train_units) /
+            _crossval_loss(baseline_pred, binned, train_trials, train_units)
+        )
+
+        # Record loss on validation set.
+        valid_rsq[i, j] = 1 - (
+            _crossval_loss(pred, binned, val_trials, val_units) /
+            _crossval_loss(baseline_pred, binned, val_trials, val_units)
+        )
 
         # Save loss on test set if validation loss is optimal
-        if np.argmin(valid_loss[i]) == j:
-            test_loss[i] = _crossval_loss(
-                pred, binned, test_trials, test_units)
+        if np.argmax(valid_rsq[i]) == j:
+            test_rsq[i] = 1 - (
+                _crossval_loss(pred, binned, test_trials, test_units) /
+                _crossval_loss(baseline_pred, binned, test_trials, test_units)
+            )
 
         # Save results.
         if j == n_valid_samples - 1:
@@ -320,9 +233,9 @@ def paramsearch(
                 "warp_reg": warp_reg[:(i+1)],
                 "iterations": iterations[:(i+1)],
                 "warp_iterations": warp_iterations[:(i+1)],
-                "train_loss": train_loss[:(i+1)],
-                "valid_loss": valid_loss[:(i+1)],
-                "test_loss": test_loss[:(i+1)],
+                "train_rsq": train_rsq[:(i+1)],
+                "valid_rsq": valid_rsq[:(i+1)],
+                "test_rsq": test_rsq[:(i+1)],
                 "loss_hists": loss_hists[:(i+1)],
             }
             if outfile is not None:

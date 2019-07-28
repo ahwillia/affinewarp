@@ -122,7 +122,7 @@ class ShiftWarping(object):
         # Initialize shifts and model template.
         self.shifts = np.zeros(K, dtype=int)
         self.template = None
-        self._fit_template(data)
+        self._fit_template(data[trial_idx, :, :])
 
         # Initialize loss history
         if self.loss == "quadratic":
