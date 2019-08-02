@@ -160,7 +160,7 @@ def paramsearch(
 
     # Initialize arrays to store losses.
     train_rsq = np.empty((n_samples, n_valid_samples))
-    valid_rsq = np.full((n_samples, n_valid_samples), np.inf)
+    valid_rsq = np.full((n_samples, n_valid_samples), -np.inf)
     test_rsq = np.empty(n_samples)
     loss_hists = np.full(
         (n_samples, n_valid_samples, iter_range[1]), np.nan)
