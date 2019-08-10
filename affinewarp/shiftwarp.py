@@ -122,7 +122,8 @@ class ShiftWarping(object):
         # Initialize shifts and model template.
         self.shifts = np.zeros(K, dtype=int)
         self.template = None
-        self._fit_template(data[trial_idx, :, :])
+        self._fit_template(
+            data[trial_idx, :, :], self.shifts[trial_idx])
 
         # Initialize loss history
         if self.loss == "quadratic":
@@ -140,7 +141,8 @@ class ShiftWarping(object):
         for i in pbar:
             # Update parameters and compute loss.
             self._fit_warps(data[:, :, neuron_idx])
-            self._fit_template(data[trial_idx, :, :])
+            self._fit_template(
+                data[trial_idx, :, :], self.shifts[trial_idx])
             self._record_loss(data)
 
             # update loss display
@@ -171,18 +173,19 @@ class ShiftWarping(object):
             self.shifts = \
                 self.shifts - round(float(np.mean(self.shifts)))
 
-    def _fit_template(self, data):
+    def _fit_template(self, data, shifts):
         """Updates template firing rates."""
 
         # Data dimensions.
         K, T, N = data.shape
+        assert len(shifts) == K
 
         if self.loss == 'quadratic':
             DtD = _diff_gramian(T, self.smoothness_reg_scale * K, self.l2_reg_scale * K)
             WtW = np.zeros((3, T))
             WtX = np.zeros((T, N))
-            _fill_WtW(self.shifts, WtW[-1])
-            _fill_WtX(data, self.shifts, WtX)
+            _fill_WtW(shifts, WtW[-1])
+            _fill_WtX(data, shifts, WtX)
             if self.nonneg:
                 self.template = nnls_solveh_banded((WtW + DtD), WtX, self.template)
             else:
@@ -197,7 +200,7 @@ class ShiftWarping(object):
 
             # Set up optimization problem.
             obj = PoissonObjective(data, self.smoothness_reg_scale,
-                                   self.l2_reg_scale, shifts=self.shifts)
+                                   self.l2_reg_scale, shifts=shifts)
 
             # Fit template.
             opt = scipy.optimize.minimize(obj, x0,
