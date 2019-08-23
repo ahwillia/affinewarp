@@ -199,10 +199,10 @@ def paramsearch(
         # Store optimization learning curve.
         loss_hists[i, j, :(iterations[i, j] + 1)] = model.loss_hist
 
-        # Create baseline model (simple trial average).
+        # Create baseline model.
         baseline_pred = np.tile(
-            np.mean(binned[train_trials], axis=0, keepdims=True),
-            (binned.shape[0], 1, 1)
+            np.mean(binned, axis=(0, 1), keepdims=True),
+            (binned.shape[0], binned.shape[1], 1)
         )
 
         # Record loss on training set.

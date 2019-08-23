@@ -204,9 +204,9 @@ class ShiftWarping(object):
 
             # Fit template.
             opt = scipy.optimize.minimize(obj, x0,
-                                          jac=True, hessp=obj.hessp,
-                                          method='newton-cg',
-                                          options=dict(maxiter=1))
+                                          jac=True,  # hessp=obj.hessp,
+                                          method='L-BFGS-B',  # 'newton-cg',
+                                          options=dict(maxiter=4))
             self.template = (opt.x).reshape(T, N)
 
     def _record_loss(self, data):
