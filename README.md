@@ -11,16 +11,9 @@ The code fits time warping models with either linear or piecewise linear warping
 
 ## Getting started
 
-After installing (see [below](#installing)), check out the demos in the [`examples/`](https://github.com/ahwillia/affinewarp/tree/master/examples) folder.
+After installing (see below), check out the demos in the [`examples/`](https://github.com/ahwillia/affinewarp/tree/master/examples) folder.
 
-* `Shift.ipynb` - demonstrates the essential ideas on a very simple, synthethic dataset containing only one neuron.
-* `OFC-2.ipynb` - shows a more complete analysis on real data. The tutorial uses a publicly available dataset from [crcns.org](https://crcns.org/), which can be found [here](https://crcns.org/data-sets/ofc/ofc-2/about-ofc-2). See `OFC-2-wrangle-data.ipynb` for instructions on downloading and organizing the dataset.
-
-The code is fairly well-documented but the tutorials can still be improved, so let us know if you run into trouble. 
-
-## Installing
-
-This package isn't registered yet, so you need to install manually. Either download or clone the repo:
+Either download or clone the repo:
 
 ```
 git clone https://github.com/ahwillia/affinewarp/
