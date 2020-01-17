@@ -379,7 +379,7 @@ def _warp_data(data, shifts, out):
             t += 1
 
 
-@numba.jit(nopython=True, parallel=True)
+@numba.jit(nopython=True)
 def _eval_quad_loss(data, template, shifts):
     K, T, N = data.shape
     total_loss = 0.0
@@ -401,7 +401,7 @@ def _eval_quad_loss(data, template, shifts):
     return total_loss / data.size
 
 
-@numba.jit(nopython=True, parallel=True)
+@numba.jit(nopython=True)
 def _eval_poiss_loss(data, template, shifts):
     K, T, N = data.shape
     total_loss = 0.0

@@ -196,7 +196,7 @@ def _construct_warp_optimizer(loss):
                 curr_obj = best_obj
 
             # Random search with exponentially decaying temperature.
-            for logtemp in np.linspace(min_temp, max_temp, iterations):
+            for logtemp in np.linspace(max_temp, min_temp, iterations):
                 temperature = 10 ** logtemp
 
                 # Perturb x_knots and y_knots

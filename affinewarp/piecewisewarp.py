@@ -34,7 +34,7 @@ class PiecewiseWarping(object):
     """
 
     def __init__(self, n_knots=0, warp_reg_scale=0.0, smoothness_reg_scale=0.0,
-                 l2_reg_scale=1e-7, min_temp=-2, max_temp=0, n_restarts=1,
+                 l2_reg_scale=1e-7, min_temp=-3, max_temp=-1.5, n_restarts=1,
                  loss='quadratic'):
         """
         Parameters
@@ -49,9 +49,9 @@ class PiecewiseWarping(object):
             warping templates.
         l2_reg_scale : int or float, default 1e-4
             Penalty strength on L2 norm of the warping template.
-        min_temp : int or float, default -2
+        min_temp : int or float, default -3
             Smallest mutation rate for evolutionary optimization of warps.
-        max_temp : int or float, default 0
+        max_temp : int or float, default -1.5
             Largest mutation rate for evolutionary optimization of warps.
         n_restarts : int, default 1
             Number of times to restart optimization on warps.
