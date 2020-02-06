@@ -52,9 +52,9 @@ def paramsearch(
     Performs nested cross-validation over shift-only, linear, and
     piecewise linear warping models, in order to tune all hyperparmeters
     and compare performance. For each set of randomly sampled parameters,
-    trials and units are randomly split `n_folds` times into train/test
-    groups. An R-squared metric of across-trial reliability is measured
-    on each test set; larger scores indicate warping functions that generalize
+    trials and units are randomly split into train/validation/test sets.
+    An R-squared metric of across-trial reliability is measured on each
+    test set; larger scores indicate warping functions that generalize
     better.
 
     Parameters
@@ -140,6 +140,17 @@ def paramsearch(
     Notes
     -----
     Only implemented for quadratic loss.
+
+    Example
+    -------
+    If we set `n_samples = 40` and `n_valid_samples = 100`. This runs 40
+    different train-validation-test partitions (since the results are
+    sensitive to which neurons and trials you hold out), and for each
+    partition tries 100 different random parameter settings. Each parameter
+    set is trained on the training set and evaluated on the validation set.
+    The model that does best on the validation set is evaluated on the test
+    set.
+
     """
 
     # Dataset dimensions (trials x timepoints x units).
