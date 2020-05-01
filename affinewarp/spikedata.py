@@ -238,16 +238,19 @@ class SpikeData(object):
 
     def squeeze_neurons(self, inplace=False):
         """
-        Drops neurons that have no spikes. Then, reindexes neuron ids
+        Drops neurons without any spikes, then reindexes neuron ids
         as integers starting at zero.
         """
-        arr_map = np.full(self.n_neurons, -1)
-        neuron_ids = np.unique(self.neurons)
-        arr_map[neuron_ids] = np.arange(len(neuron_ids))
-        result = self if inplace else self.copy()
-        _reindex(result.neurons, arr_map)
-        result.n_neurons = len(neuron_ids)
-        return result
+        kept = np.where(self.spikes_per_neuron() > 0)[0]
+        return self.select_neurons(kept, inplace=inplace)
+
+    def squeeze_trials(self, inplace=False):
+        """
+        Drops trials without any spikes, then reindexes trial ids
+        as integers starting at zero.
+        """
+        kept = np.where(self.spikes_per_trial() > 0)[0]
+        return self.select_trials(kept, inplace=inplace)
 
     def reorder_neurons(self, neuron_indices, inplace=False):
         """
@@ -387,7 +390,7 @@ def _fast_bin(counts, trials, bins, neurons):
     """
     for i, j, k in zip(trials, bins, neurons):
         if (j < 0) or (int(j) >= counts.shape[1]):
-            pass
+            pass  # spike is less than TMIN, or greater than TMAX.
         else:
             counts[i, int(j), k] += 1
 
@@ -395,7 +398,11 @@ def _fast_bin(counts, trials, bins, neurons):
 @numba.jit(nopython=True)
 def _reindex(arr, arr_map):
     """
-    Computes re-indexing array to remap values in 'arr'.
+    Remaps index variables in 'arr' to new set of values
+    held in 'arr_map'.
+
+    arr : length N array holding integers {1, 2, ..., M}
+    arr_map : length M array holding new integer ids
     """
     for i, x in enumerate(arr):
         arr[i] = arr_map[x]
