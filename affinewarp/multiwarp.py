@@ -31,7 +31,7 @@ class MultiShiftWarping:
             L = model.maxlag * n_time
             model.shifts = np.random.randint(-L, L, size=n_trials)
             model.template = None
-            model._fit_template(data - pred)
+            model._fit_template(data - pred, model.shifts)
             pred += model.predict()
 
         # # Initialize templates and warps manually.
