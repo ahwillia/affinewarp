@@ -36,8 +36,6 @@ You will need to repeat these steps if we update the code.
 
 ## Other references / resources
 
-* [tw-pca](https://github.com/ganguli-lab/twpca) - Time-Warping Principal Components Analysis, also supports linear and shift-only warping functions. Does not support piecewise linear warping functions and assumes that time series are low-dimensional. Nonlinear warping methods are also supported. See our [conference abstract](https://cs.stanford.edu/~poole/twpca_poster.pdf) and [poster](https://cs.stanford.edu/~poole/twpca_poster.pdf).
-
 * [tslearn](https://tslearn.readthedocs.io/) - A Python package supporting a variety of time series models, including DTW-based methods.
 
 ## Contact
