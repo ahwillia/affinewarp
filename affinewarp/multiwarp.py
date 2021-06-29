@@ -57,6 +57,8 @@ class MultiShiftWarping:
             self.loss_hist.append(
                 np.mean((self.predict() - data)**2))
 
+        return self
+
     def predict(self, skip=[]):
         K = len(self.models[0].shifts)
         T, N = self.models[0].template.shape

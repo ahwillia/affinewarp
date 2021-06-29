@@ -174,6 +174,8 @@ class PiecewiseWarping(object):
                 pbar.set_description(
                     "Loss improvement: {0:.2f}%".format(rel_imp))
 
+        return self
+
     def _fit_warps(self, data, warp_iterations, neuron_idx):
         """Fit warping functions by local random search.
 

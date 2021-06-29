@@ -154,6 +154,8 @@ class ShiftWarping(object):
         self.fractional_shifts = self.shifts / T
         self._losses = None
 
+        return self
+
     def _fit_warps(self, data):
         """Updates shift parameters."""
 
