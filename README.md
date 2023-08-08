@@ -40,4 +40,4 @@ You will need to repeat these steps if we update the code.
 
 ## Contact
 
-ahwillia@stanford.edu (or open an issue here).
+alex.h.williams@nyu.edu (or open an issue here).
