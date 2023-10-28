@@ -3,5 +3,5 @@ scipy
 matplotlib
 numba
 tqdm
-sklearn
+scikit-learn
 pytest
